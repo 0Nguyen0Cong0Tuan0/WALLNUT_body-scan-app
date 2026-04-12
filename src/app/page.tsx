@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
 import TrustNavigation from "@/components/TrustNavigation";
+import HowItWorks from "@/components/HowItWorks";
+import ChatAssistant from "@/components/ChatAssistant";
 import type { RuViewFrame } from "@/lib/ruviewSimulator";
 import { estimateCircumferences, MEASUREMENT_ORDER } from "@/lib/anthropometricModel";
 import type { BodyCircumferences } from "@/lib/anthropometricModel";
@@ -542,10 +544,71 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
         </div>
       )}
 
+      {/* ── RAG Chat Assistant ── */}
+      <div className="rounded-xl overflow-hidden flex flex-col"
+        style={{ border: "1px solid var(--color-border)", background: "var(--color-surface-1)", minHeight: 480 }}>
+        <ChatAssistant
+          scanMetrics={{
+            heartRateBpm:          frame.vitals.heartRate,
+            breathingRateBpm:      frame.vitals.breathingRate,
+            hrv:                   frame.vitals.hrv,
+            bodyFatPercent:        analysis.bodyFatPercent,
+            bodyFatClassification: analysis.bodyFatClassification,
+            estimatedHeightCm:     frame.bodyMetrics.estimatedHeightCm,
+            shoulderWidthCm:       frame.bodyMetrics.shoulderWidthCm,
+            hipWidthCm:            frame.bodyMetrics.hipWidthCm,
+            activity:              frame.temporal?.activity ?? "unknown",
+            activityConfidence:    frame.temporal?.activityConfidence ?? 0.7,
+            clinicalSummary:       analysis.clinicalSummary,
+          }}
+        />
+      </div>
+
+      {/* ── How It Works — collapsible pipeline explainer ── */}
+      <HowItWorksPanelWrapper />
+
       <p className="text-center text-xs pb-2" style={{ color: "var(--color-text-muted)" }}>
         <span className="w-3 h-3 inline-block mr-1"><Icon.Lock /></span>
         No camera. No biometric storage. WiFi RF analysis only.
       </p>
+    </div>
+  );
+}
+
+// ─── How It Works wrapper (collapsible panel) ────────────────────────────────
+function HowItWorksPanelWrapper() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--color-border)" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+        style={{ background: "var(--color-surface-2)", border: "none", cursor: "pointer" }}
+      >
+        <div className="flex items-center gap-2.5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#22d3ee" strokeWidth={1.75}
+            style={{ width: 16, height: 16, flexShrink: 0 }}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15M14.25 3.104c.251.023.501.05.75.082M19.8 15l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 01-6.23-.607L5 14.5m14.8.5l.391 1.561a2.25 2.25 0 01-2.185 2.814H6.001a2.25 2.25 0 01-2.185-2.814L4.198 15" />
+          </svg>
+          <span className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
+            How WALLNUT Works — Pipeline Explainer
+          </span>
+          <span className="text-xs px-2 py-0.5 rounded" style={{
+            background: "#22d3ee12", color: "#22d3ee", border: "1px solid #22d3ee30",
+            fontSize: "0.62rem", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase",
+          }}>5 Stages</span>
+        </div>
+        <span style={{
+          color: "#4a8fa8", fontSize: "0.8rem",
+          transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s", display: "inline-block",
+        }}>▾</span>
+      </button>
+      {open && (
+        <div className="p-4" style={{ background: "var(--color-surface-1)" }}>
+          <HowItWorks />
+        </div>
+      )}
     </div>
   );
 }
