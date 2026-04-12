@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useEffect, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Html } from "@react-three/drei";
 import * as THREE from "three";
@@ -19,13 +19,52 @@ interface BodyMetrics {
   bmi_proxy: number;
 }
 
+interface PoseKeypoint {
+  point: string;
+  x: number;
+  y: number;
+  confidence: number;
+}
+
+interface PoseSequenceFrame {
+  t: number;
+  keypoints: PoseKeypoint[];
+  confidence: number;
+  motionScore: number;
+}
+
 interface Props {
-  keypoints?: unknown[];
+  keypoints?: PoseKeypoint[];
+  keypointSequence?: PoseSequenceFrame[];
+  activity?: string;
+  dominantMotionHz?: number;
+  breathingHz?: number;
+  minHeight?: number | string;
   bodyMetrics: BodyMetrics;
   bodyFatPercent: number;
   classification: string;
   measurements: BodyCircumferences;
 }
+
+const CANONICAL_POSE_2D: Record<string, [number, number]> = {
+  nose: [0.50, 0.06],
+  left_eye: [0.47, 0.04],
+  right_eye: [0.53, 0.04],
+  left_ear: [0.44, 0.05],
+  right_ear: [0.56, 0.05],
+  left_shoulder: [0.38, 0.20],
+  right_shoulder: [0.62, 0.20],
+  left_elbow: [0.30, 0.38],
+  right_elbow: [0.70, 0.38],
+  left_wrist: [0.25, 0.54],
+  right_wrist: [0.75, 0.54],
+  left_hip: [0.42, 0.52],
+  right_hip: [0.58, 0.52],
+  left_knee: [0.40, 0.72],
+  right_knee: [0.60, 0.72],
+  left_ankle: [0.40, 0.92],
+  right_ankle: [0.60, 0.92],
+};
 
 // ─── Clinical colour by body-fat tier ────────────────────────────────────────
 function fatHex(pct: number): string {
@@ -77,14 +116,15 @@ function Limb({
 }
 
 // ─── Tapered torso segment (CylinderGeometry, elliptical cross-section) ───────
-function TorsoSegment({ yB, yT, rB, rT, dz, color, opacity = 0.80 }: {
+function TorsoSegment({ yB, yT, rB, rT, dz, color, opacity = 0.80, cx = 0 }: {
   yB: number; yT: number; rB: number; rT: number; dz: number;
+  cx?: number;
   color: string; opacity?: number;
 }) {
   const h = yT - yB;
   const cy = yB + h / 2;
   return (
-    <group position={[0, cy, 0]} scale={[1, 1, dz]}>
+    <group position={[cx, cy, 0]} scale={[1, 1, dz]}>
       <mesh castShadow receiveShadow>
         <cylinderGeometry args={[rT, rB, h, 20, 1]} />
         <meshStandardMaterial color={color} roughness={0.4} metalness={0.05} transparent opacity={opacity} />
@@ -193,16 +233,35 @@ function ScanRing({ bodyBottom, bodyTop }: { bodyBottom: number; bodyTop: number
 
 // ─── Complete human body in A-pose with measurement overlays ─────────────────
 function HumanBody({
-  bodyMetrics, bodyFatPercent, measurements, spinning,
+  bodyMetrics,
+  bodyFatPercent,
+  measurements,
+  spinning,
+  poseKeypoints,
+  activity,
+  breathingHz,
 }: {
   bodyMetrics: BodyMetrics;
   bodyFatPercent: number;
   measurements: BodyCircumferences;
   spinning: boolean;
+  poseKeypoints?: PoseKeypoint[];
+  activity?: string;
+  breathingHz?: number;
 }) {
+  type V3 = [number, number, number];
   const groupRef = useRef<THREE.Group>(null!);
-  useFrame((_, delta) => {
+  const torsoRef = useRef<THREE.Group>(null!);
+  useFrame(({ clock }, delta) => {
     if (spinning) groupRef.current.rotation.y += delta * 0.28;
+    const targetTilt = activity === "fallen" ? -Math.PI * 0.47 : 0;
+    groupRef.current.rotation.z += (targetTilt - groupRef.current.rotation.z) * 0.08;
+    if (torsoRef.current) {
+      const hz = breathingHz && breathingHz > 0 ? breathingHz : 0.25;
+      const amp = activity === "walking" ? 0.022 : 0.015;
+      const pulse = 1 + Math.sin(clock.elapsedTime * 2 * Math.PI * hz) * amp;
+      torsoRef.current.scale.set(1, pulse * 0.96, pulse);
+    }
   });
 
   // ── Body geometry proportions ───────────────────────────────────────────────
@@ -245,81 +304,202 @@ function HumanBody({
   const torsoDepth = 0.52 * fatF;
   const color = fatHex(bodyFatPercent);
 
-  const eoF = 1.05; const efF = 0.08;
-  const woF = 1.12; const wfF = 0.14;
+  const eoF = 1.05;
+  const efF = 0.08;
+  const woF = 1.12;
+  const wfF = 0.14;
+
+  const poseMap = useMemo(
+    () =>
+      Object.fromEntries(
+        (poseKeypoints ?? []).map((keypoint) => [keypoint.point, keypoint])
+      ) as Record<string, PoseKeypoint>,
+    [poseKeypoints]
+  );
+
+  const poseGainX = Math.max(0.16, SW * 2.4);
+  const poseGainY = Math.max(0.18, torsoH * 1.4);
+  const offsetFor = (pointName: string, gainX = poseGainX, gainY = poseGainY): [number, number] => {
+    const current = poseMap[pointName];
+    const canonical = CANONICAL_POSE_2D[pointName];
+    if (!current || !canonical) return [0, 0];
+    return [(current.x - canonical[0]) * gainX, (current.y - canonical[1]) * gainY];
+  };
+
+  const [noseDx, noseDy] = offsetFor("nose", poseGainX * 0.7, poseGainY);
+  const headPos: V3 = [noseDx * 0.6, HEAD_Y + noseDy, 0];
+
+  const [lsDx, lsDy] = offsetFor("left_shoulder");
+  const [rsDx, rsDy] = offsetFor("right_shoulder");
+  const [leDx, leDy] = offsetFor("left_elbow");
+  const [reDx, reDy] = offsetFor("right_elbow");
+  const [lwDx, lwDy] = offsetFor("left_wrist");
+  const [rwDx, rwDy] = offsetFor("right_wrist");
+  const [lhDx, lhDy] = offsetFor("left_hip");
+  const [rhDx, rhDy] = offsetFor("right_hip");
+  const [lkDx, lkDy] = offsetFor("left_knee", poseGainX * 1.8, poseGainY * 1.2);
+  const [rkDx, rkDy] = offsetFor("right_knee", poseGainX * 1.8, poseGainY * 1.2);
+  const [laDx, laDy] = offsetFor("left_ankle", poseGainX * 1.8, poseGainY * 1.2);
+  const [raDx, raDy] = offsetFor("right_ankle", poseGainX * 1.8, poseGainY * 1.2);
+
+  const leftShoulder: V3 = [-SW + lsDx, SHLD_Y + lsDy, 0];
+  const rightShoulder: V3 = [SW + rsDx, SHLD_Y + rsDy, 0];
+  const leftElbow: V3 = [-SW * eoF + leDx, ELBOW_Y + leDy, efF];
+  const rightElbow: V3 = [SW * eoF + reDx, ELBOW_Y + reDy, efF];
+  const leftWrist: V3 = [-SW * woF + lwDx, WRIST_Y + lwDy, wfF];
+  const rightWrist: V3 = [SW * woF + rwDx, WRIST_Y + rwDy, wfF];
+
+  const leftHip: V3 = [-HW * 0.72 + lhDx, HIP_Y + lhDy, 0];
+  const rightHip: V3 = [HW * 0.72 + rhDx, HIP_Y + rhDy, 0];
+  const leftKnee: V3 = [-HW * 0.62 + lkDx, KNEE_Y + lkDy, 0.03];
+  const rightKnee: V3 = [HW * 0.62 + rkDx, KNEE_Y + rkDy, 0.03];
+  const leftAnkle: V3 = [-HW * 0.42 + laDx, ANKLE_Y + laDy, 0];
+  const rightAnkle: V3 = [HW * 0.42 + raDx, ANKLE_Y + raDy, 0];
+
+  const torsoTopY = (leftShoulder[1] + rightShoulder[1]) / 2;
+  const torsoBottomY = (leftHip[1] + rightHip[1]) / 2;
+  const torsoCenterX =
+    (leftShoulder[0] + rightShoulder[0] + leftHip[0] + rightHip[0]) / 4;
 
   // ── Measurement label positions (world space) ─────────────────────────────
   // Positioned just outside body width on each side
   const LABEL_OFFSET = SW * 1.6;
-  type V3 = [number,number,number];
 
-  const labelPositions: Record<string, { pos: V3; bodyEdge: V3; side: "left"|"right" }> = {
-    neck:       { pos: [-LABEL_OFFSET, NECK_Y + 0.02, 0],   bodyEdge: [-neckR * 2, NECK_Y + 0.02, 0],           side: "left" },
-    shoulder:   { pos: [LABEL_OFFSET,  SHLD_Y,        0],   bodyEdge: [SW,         SHLD_Y,         0],           side: "right" },
-    upperChest: { pos: [-LABEL_OFFSET, SHLD_Y - torsoH*0.18, 0], bodyEdge: [-chestW * 0.92, SHLD_Y - torsoH*0.18, 0], side: "left" },
-    upperArm:   { pos: [LABEL_OFFSET,  ELBOW_Y + upperArmH*0.5, 0], bodyEdge: [SW * eoF, ELBOW_Y + upperArmH*0.5, 0], side: "right" },
-    waist:      { pos: [-LABEL_OFFSET, HIP_Y + torsoH*0.28, 0], bodyEdge: [-HW * 0.82, HIP_Y + torsoH*0.28, 0], side: "left" },
-    hip:        { pos: [LABEL_OFFSET,  HIP_Y,               0], bodyEdge: [HW,          HIP_Y,               0], side: "right" },
-    thigh:      { pos: [-LABEL_OFFSET, KNEE_Y + thighH*0.5, 0], bodyEdge: [-HW * 0.72, KNEE_Y + thighH*0.5,  0], side: "left" },
-    calf:       { pos: [LABEL_OFFSET,  ANKLE_Y + shinH*0.48, 0], bodyEdge: [HW * 0.45, ANKLE_Y + shinH*0.48,  0], side: "right" },
+  const labelPositions: Record<string, { pos: V3; bodyEdge: V3; side: "left" | "right" }> = {
+    neck: {
+      pos: [-LABEL_OFFSET, NECK_Y + 0.02, 0],
+      bodyEdge: [headPos[0] - neckR * 2, NECK_Y + 0.02, 0],
+      side: "left",
+    },
+    shoulder: {
+      pos: [LABEL_OFFSET, torsoTopY, 0],
+      bodyEdge: rightShoulder,
+      side: "right",
+    },
+    upperChest: {
+      pos: [-LABEL_OFFSET, torsoTopY - torsoH * 0.18, 0],
+      bodyEdge: [torsoCenterX - chestW * 0.92, torsoTopY - torsoH * 0.18, 0],
+      side: "left",
+    },
+    upperArm: {
+      pos: [LABEL_OFFSET, (rightShoulder[1] + rightElbow[1]) / 2, 0],
+      bodyEdge: rightElbow,
+      side: "right",
+    },
+    waist: {
+      pos: [-LABEL_OFFSET, torsoBottomY + torsoH * 0.28, 0],
+      bodyEdge: [torsoCenterX - HW * 0.82, torsoBottomY + torsoH * 0.28, 0],
+      side: "left",
+    },
+    hip: {
+      pos: [LABEL_OFFSET, torsoBottomY, 0],
+      bodyEdge: rightHip,
+      side: "right",
+    },
+    thigh: {
+      pos: [-LABEL_OFFSET, (leftHip[1] + leftKnee[1]) / 2, 0],
+      bodyEdge: leftKnee,
+      side: "left",
+    },
+    calf: {
+      pos: [LABEL_OFFSET, (rightKnee[1] + rightAnkle[1]) / 2, 0],
+      bodyEdge: rightAnkle,
+      side: "right",
+    },
   };
 
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} position={[0, activity === "fallen" ? -0.07 : 0, 0]}>
       {/* ── Head ── */}
-      <mesh position={[0, HEAD_Y, 0]} castShadow>
+      <mesh position={headPos} castShadow>
         <sphereGeometry args={[HEAD_R, 24, 24]} />
         <meshStandardMaterial color={color} roughness={0.5} metalness={0.05} transparent opacity={0.85} />
       </mesh>
-      <mesh position={[0, HEAD_Y, 0]}>
+      <mesh position={headPos}>
         <sphereGeometry args={[HEAD_R * 1.02, 14, 14]} />
         <meshBasicMaterial color="#22d3ee" wireframe transparent opacity={0.10} />
       </mesh>
 
       {/* ── Neck ── */}
-      <Limb from={[0, CHIN_Y, 0]} to={[0, NECK_Y, 0]} radius={neckR} color={color} opacity={0.8} />
+      <Limb
+        from={[headPos[0], CHIN_Y + noseDy * 0.4, 0]}
+        to={[torsoCenterX, NECK_Y + (lsDy + rsDy) * 0.5, 0]}
+        radius={neckR}
+        color={color}
+        opacity={0.8}
+      />
 
       {/* ── Torso ── */}
-      <TorsoSegment yB={HIP_Y + torsoH*0.4} yT={SHLD_Y}   rB={chestW*0.88} rT={chestW}    dz={torsoDepth*0.9} color={color} />
-      <TorsoSegment yB={HIP_Y}              yT={HIP_Y + torsoH*0.4} rB={HW*1.05} rT={chestW*0.88} dz={torsoDepth} color={color} />
+      <group ref={torsoRef}>
+        <TorsoSegment
+          yB={torsoBottomY + torsoH * 0.4}
+          yT={torsoTopY}
+          rB={chestW * 0.88}
+          rT={chestW}
+          dz={torsoDepth * 0.9}
+          cx={torsoCenterX}
+          color={color}
+        />
+        <TorsoSegment
+          yB={torsoBottomY}
+          yT={torsoBottomY + torsoH * 0.4}
+          rB={HW * 1.05}
+          rT={chestW * 0.88}
+          dz={torsoDepth}
+          cx={torsoCenterX}
+          color={color}
+        />
+      </group>
 
       {/* ── Shoulders ── */}
-      <Joint pos={[-SW, SHLD_Y, 0]} r={SW * 0.14} />
-      <Joint pos={[SW,  SHLD_Y, 0]} r={SW * 0.14} />
+      <Joint pos={leftShoulder} r={SW * 0.14} />
+      <Joint pos={rightShoulder} r={SW * 0.14} />
 
       {/* ── Left arm ── */}
-      <Limb from={[-SW, SHLD_Y, 0]} to={[-SW*eoF, ELBOW_Y, efF]} radius={upperArmR} color={color} />
-      <Joint pos={[-SW*eoF, ELBOW_Y, efF] as V3} r={upperArmR*0.75} />
-      <Limb from={[-SW*eoF, ELBOW_Y, efF]} to={[-SW*woF, WRIST_Y, wfF]} radius={forearmR} color={color} />
-      <mesh position={[-SW*woF, WRIST_Y - handR, wfF]} castShadow>
+      <Limb from={leftShoulder} to={leftElbow} radius={upperArmR} color={color} />
+      <Joint pos={leftElbow} r={upperArmR * 0.75} />
+      <Limb from={leftElbow} to={leftWrist} radius={forearmR} color={color} />
+      <mesh position={[leftWrist[0], leftWrist[1] - handR, leftWrist[2]]} castShadow>
         <sphereGeometry args={[handR, 10, 10]} />
         <meshStandardMaterial color={color} roughness={0.5} transparent opacity={0.8} />
       </mesh>
 
       {/* ── Right arm ── */}
-      <Limb from={[SW, SHLD_Y, 0]} to={[SW*eoF, ELBOW_Y, efF]} radius={upperArmR} color={color} />
-      <Joint pos={[SW*eoF, ELBOW_Y, efF] as V3} r={upperArmR*0.75} />
-      <Limb from={[SW*eoF, ELBOW_Y, efF]} to={[SW*woF, WRIST_Y, wfF]} radius={forearmR} color={color} />
-      <mesh position={[SW*woF, WRIST_Y - handR, wfF]} castShadow>
+      <Limb from={rightShoulder} to={rightElbow} radius={upperArmR} color={color} />
+      <Joint pos={rightElbow} r={upperArmR * 0.75} />
+      <Limb from={rightElbow} to={rightWrist} radius={forearmR} color={color} />
+      <mesh position={[rightWrist[0], rightWrist[1] - handR, rightWrist[2]]} castShadow>
         <sphereGeometry args={[handR, 10, 10]} />
         <meshStandardMaterial color={color} roughness={0.5} transparent opacity={0.8} />
       </mesh>
 
       {/* ── Hip joints ── */}
-      <Joint pos={[-HW*0.72, HIP_Y, 0]} r={HW*0.22} />
-      <Joint pos={[HW*0.72,  HIP_Y, 0]} r={HW*0.22} />
+      <Joint pos={leftHip} r={HW * 0.22} />
+      <Joint pos={rightHip} r={HW * 0.22} />
 
       {/* ── Left leg ── */}
-      <Limb from={[-HW*0.72, HIP_Y, 0]}   to={[-HW*0.62, KNEE_Y, 0.03]}  radius={thighR} color={color} />
-      <Joint pos={[-HW*0.62, KNEE_Y, 0.03]} r={thighR*0.72} />
-      <Limb from={[-HW*0.62, KNEE_Y, 0.03]} to={[-HW*0.42, ANKLE_Y, 0]}  radius={shinR}  color={color} />
-      <Limb from={[-HW*0.42, ANKLE_Y, 0]} to={[-HW*0.42, ANKLE_Y, -footR*2.5]} radius={footR} color={color} opacity={0.75} />
+      <Limb from={leftHip} to={leftKnee} radius={thighR} color={color} />
+      <Joint pos={leftKnee} r={thighR * 0.72} />
+      <Limb from={leftKnee} to={leftAnkle} radius={shinR} color={color} />
+      <Limb
+        from={leftAnkle}
+        to={[leftAnkle[0], leftAnkle[1], leftAnkle[2] - footR * 2.5]}
+        radius={footR}
+        color={color}
+        opacity={0.75}
+      />
 
       {/* ── Right leg ── */}
-      <Limb from={[HW*0.72, HIP_Y, 0]}   to={[HW*0.62, KNEE_Y, 0.03]}  radius={thighR} color={color} />
-      <Joint pos={[HW*0.62, KNEE_Y, 0.03]} r={thighR*0.72} />
-      <Limb from={[HW*0.62, KNEE_Y, 0.03]} to={[HW*0.42, ANKLE_Y, 0]}   radius={shinR}  color={color} />
-      <Limb from={[HW*0.42, ANKLE_Y, 0]} to={[HW*0.42, ANKLE_Y, -footR*2.5]} radius={footR} color={color} opacity={0.75} />
+      <Limb from={rightHip} to={rightKnee} radius={thighR} color={color} />
+      <Joint pos={rightKnee} r={thighR * 0.72} />
+      <Limb from={rightKnee} to={rightAnkle} radius={shinR} color={color} />
+      <Limb
+        from={rightAnkle}
+        to={[rightAnkle[0], rightAnkle[1], rightAnkle[2] - footR * 2.5]}
+        radius={footR}
+        color={color}
+        opacity={0.75}
+      />
 
       {/* ── Ground shadow ── */}
       <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, FOOT_Y - 0.01, 0]} receiveShadow>
@@ -347,15 +527,55 @@ function HumanBody({
 
 // ─── Root component ───────────────────────────────────────────────────────────
 export default function Body3DViewer({
-  bodyMetrics, bodyFatPercent, classification, measurements,
+  keypoints,
+  keypointSequence,
+  activity,
+  dominantMotionHz,
+  breathingHz,
+  minHeight = "clamp(460px, 62vh, 860px)",
+  bodyMetrics,
+  bodyFatPercent,
+  classification,
+  measurements,
 }: Props) {
   const color = fatHex(bodyFatPercent);
-  // Stop auto-spin when user interacts — done via OrbitControls event
-  const spinning = useRef(true);
+  const [spinning, setSpinning] = useState(true);
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  const playbackFps = useMemo(() => {
+    if (keypointSequence && keypointSequence.length > 1) {
+      const dt = keypointSequence[1].t - keypointSequence[0].t;
+      if (dt > 0) return Math.min(20, Math.max(5, 1 / dt));
+    }
+    return 10;
+  }, [keypointSequence]);
+
+  useEffect(() => {
+    if (!keypointSequence || keypointSequence.length < 2) return;
+    const intervalMs = Math.max(40, Math.round(1000 / playbackFps));
+    const timer = setInterval(() => {
+      setFrameIndex((idx) => (idx + 1) % keypointSequence.length);
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [keypointSequence, playbackFps]);
+
+  const activeKeypoints = useMemo(() => {
+    if (keypointSequence && keypointSequence.length > 0) {
+      return keypointSequence[frameIndex % keypointSequence.length].keypoints;
+    }
+    return keypoints;
+  }, [keypointSequence, frameIndex, keypoints]);
+
+  const replayLabel =
+    keypointSequence && keypointSequence.length > 1
+      ? `Replay ${frameIndex + 1}/${keypointSequence.length}`
+      : "Static pose";
 
   return (
     <div style={{
-      width: "100%", height: "100%", minHeight: 480,
+      width: "100%",
+      height: "100%",
+      minHeight: typeof minHeight === "number" ? `${minHeight}px` : minHeight,
       background: "#0d1117", borderRadius: "0.625rem 0.625rem 0 0",
       overflow: "hidden", position: "relative",
     }}>
@@ -365,8 +585,61 @@ export default function Body3DViewer({
         fontSize: "0.63rem", fontWeight: 700, letterSpacing: "0.07em",
         textTransform: "uppercase", color: "#8b95a3", userSelect: "none", pointerEvents: "none",
       }}>
-        RF Body Mesh · SMPL-fit
+        RF Body Mesh · {replayLabel}
       </div>
+
+      {(activity || dominantMotionHz) && (
+        <div style={{
+          position: "absolute", top: 34, left: 12, zIndex: 10,
+          fontSize: "0.58rem", fontWeight: 600, letterSpacing: "0.05em",
+          color: "#7dd3fc", background: "rgba(34,211,238,0.08)",
+          border: "1px solid rgba(34,211,238,0.25)",
+          borderRadius: "0.25rem", padding: "1px 7px",
+          userSelect: "none", pointerEvents: "none", textTransform: "uppercase",
+        }}>
+          {(activity ?? "unknown").replace("_", " ")}
+          {dominantMotionHz ? ` · ${dominantMotionHz.toFixed(2)} Hz` : ""}
+        </div>
+      )}
+
+      {keypointSequence && keypointSequence.length > 1 && (
+        <div style={{
+          position: "absolute", top: 58, left: 12, zIndex: 10,
+          fontSize: "0.58rem", fontWeight: 600, letterSpacing: "0.04em",
+          color: "#94a3b8", background: "rgba(148,163,184,0.08)",
+          border: "1px solid rgba(148,163,184,0.18)",
+          borderRadius: "0.25rem", padding: "1px 7px",
+          userSelect: "none", pointerEvents: "none",
+        }}>
+          {playbackFps.toFixed(1)} fps playback
+        </div>
+      )}
+
+      {breathingHz && breathingHz > 0 && (
+        <div style={{
+          position: "absolute", top: 82, left: 12, zIndex: 10,
+          fontSize: "0.56rem", fontWeight: 600, letterSpacing: "0.04em",
+          color: "#67e8f9", background: "rgba(103,232,249,0.08)",
+          border: "1px solid rgba(103,232,249,0.2)",
+          borderRadius: "0.25rem", padding: "1px 7px",
+          userSelect: "none", pointerEvents: "none",
+        }}>
+          breathing {breathingHz.toFixed(2)} Hz
+        </div>
+      )}
+
+      {!spinning && (
+        <div style={{
+          position: "absolute", top: 10, right: 122, zIndex: 10,
+          fontSize: "0.56rem", fontWeight: 600, letterSpacing: "0.04em",
+          color: "#94a3b8", background: "rgba(148,163,184,0.08)",
+          border: "1px solid rgba(148,163,184,0.2)",
+          borderRadius: "0.25rem", padding: "1px 7px",
+          userSelect: "none", pointerEvents: "none",
+        }}>
+          auto-spin paused
+        </div>
+      )}
       <div style={{
         position: "absolute", top: 10, right: 12, zIndex: 10,
         fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.06em",
@@ -396,7 +669,7 @@ export default function Body3DViewer({
           toneMappingExposure: 1.1,
         }}
         style={{ background: "#0d1117" }}
-        onPointerDown={() => { spinning.current = false; }}
+        onPointerDown={() => { setSpinning(false); }}
       >
         <ambientLight intensity={0.28} color="#c8d8f0" />
         <directionalLight position={[2, 5, 3]} intensity={1.8} color="#e8f4ff" castShadow
@@ -408,7 +681,10 @@ export default function Body3DViewer({
           bodyMetrics={bodyMetrics}
           bodyFatPercent={bodyFatPercent}
           measurements={measurements}
-          spinning={spinning.current}
+          spinning={spinning}
+          poseKeypoints={activeKeypoints}
+          activity={activity}
+          breathingHz={breathingHz}
         />
 
         <OrbitControls
