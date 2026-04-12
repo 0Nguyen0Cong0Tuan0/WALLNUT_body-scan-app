@@ -4,10 +4,12 @@ import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
 import TrustNavigation from "@/components/TrustNavigation";
 import HowItWorks from "@/components/HowItWorks";
-import ChatAssistant from "@/components/ChatAssistant";
+import ChatWithAI from "@/components/ChatWithAI";
+import HistoryPage from "@/app/history/page";
 import type { RuViewFrame } from "@/lib/ruviewSimulator";
 import { estimateCircumferences, MEASUREMENT_ORDER } from "@/lib/anthropometricModel";
 import type { BodyCircumferences } from "@/lib/anthropometricModel";
+import { addScanRecord } from "@/lib/scanHistory";
 
 // Body3DViewer uses Three.js / WebGL — must be client-only, no SSR
 const Body3DViewer = dynamic(() => import("@/components/Body3DViewer"), {
@@ -19,6 +21,9 @@ const Body3DViewer = dynamic(() => import("@/components/Body3DViewer"), {
     </div>
   ),
 });
+
+const SignalVizPanelClient = dynamic(() => import("@/components/SignalVizPanel"), { ssr: false });
+const LivePoseFusionClient = dynamic(() => import("@/components/LivePoseFusion"), { ssr: false });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type InputMode = "upload" | "live" | "simulate";
@@ -156,6 +161,11 @@ const Icon = {
   Circle: ({ filled }: { filled?: boolean }) => (
     <svg viewBox="0 0 8 8" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5}>
       <circle cx="4" cy="4" r="3" />
+    </svg>
+  ),
+  Observatory: () => (
+    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
     </svg>
   ),
 };
@@ -544,10 +554,10 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
         </div>
       )}
 
-      {/* ── RAG Chat Assistant ── */}
+      {/* ── Chat with AI ── */}
       <div className="rounded-xl overflow-hidden flex flex-col"
         style={{ border: "1px solid var(--color-border)", background: "var(--color-surface-1)", minHeight: 480 }}>
-        <ChatAssistant
+        <ChatWithAI
           scanMetrics={{
             heartRateBpm:          frame.vitals.heartRate,
             breathingRateBpm:      frame.vitals.breathingRate,
@@ -804,9 +814,11 @@ function InputPanel({ onScan, error, uploadProgress }: {
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 function Sidebar({ active, onSelect }: { active: string; onSelect: (v: string) => void }) {
   const items = [
-    { id: "scan",     label: "Body Scan",     icon: <Icon.Scan /> },
-    { id: "vitals",   label: "Vitals",        icon: <Icon.Heart /> },
-    { id: "workflow", label: "Methodology",   icon: <Icon.Cpu /> },
+    { id: "scan",        label: "Body Scan",    icon: <Icon.Scan /> },
+    { id: "vitals",      label: "Vitals",       icon: <Icon.Heart /> },
+    { id: "history",     label: "History",      icon: <Icon.File /> },
+    { id: "observatory", label: "Observatory",  icon: <Icon.Observatory /> },
+    { id: "workflow",    label: "Methodology",  icon: <Icon.Cpu /> },
   ];
   return (
     <aside
@@ -874,6 +886,38 @@ export default function Home() {
         setAnalysis(data.analysis);
         setCsiMeta(data.frame.csiMeta);
         setInputSource(data.inputSource);
+
+        // ── Auto-save to scan history (localStorage) ──────────────────────
+        try {
+          addScanRecord({
+            inputSource: data.inputSource as "simulate" | "upload" | "live",
+            vitals: {
+              heartRate: data.frame.vitals.heartRate,
+              breathingRate: data.frame.vitals.breathingRate,
+              hrv: data.frame.vitals.hrv,
+            },
+            bodyMetrics: {
+              estimatedHeightCm: data.frame.bodyMetrics.estimatedHeightCm,
+              shoulderWidthCm:   data.frame.bodyMetrics.shoulderWidthCm,
+              hipWidthCm:        data.frame.bodyMetrics.hipWidthCm,
+              torsoLengthCm:     data.frame.bodyMetrics.torsoLengthCm,
+              leftArmLengthCm:   data.frame.bodyMetrics.leftArmLengthCm,
+              leftLegLengthCm:   data.frame.bodyMetrics.leftLegLengthCm,
+            },
+            bodyFatPercent:        data.analysis.bodyFatPercent,
+            bodyFatClassification: data.analysis.bodyFatClassification,
+            estimatedWaistCm:      data.analysis.estimatedWaistCm,
+            activity:              data.frame.temporal?.activity ?? "unknown",
+            activityConfidence:    data.frame.temporal?.activityConfidence ?? 0,
+            dominantMotionHz:      data.frame.temporal?.dominantMotionHz ?? 0,
+            clinicalSummary:       data.analysis.clinicalSummary,
+            recommendations:       data.analysis.recommendations,
+            postureNotes:          data.analysis.postureNotes,
+            inferenceSource:       data.analysis.source,
+          });
+        } catch {
+          // History save failure is non-critical — never block the UI
+        }
       };
 
       if (request.mode === "upload") {
@@ -1012,6 +1056,24 @@ export default function Home() {
             </div>
           )}
 
+          {activePage === "history" && <HistoryPage />}
+
+          {activePage === "observatory" && (
+            <div className="p-5 max-w-5xl space-y-5">
+              <div className="rounded-xl px-4 py-3" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+                <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>CSI Signal Observatory</p>
+                <p className="text-xs mt-1 leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                  Real-time visualizer for CSI amplitude heatmap, subcarrier phase, Doppler spectrum, and COCO-17 pose fusion.
+                  Ported from RuView SignalVisualization + PoseRenderer engines.
+                </p>
+              </div>
+              <div className="grid xl:grid-cols-2 gap-5">
+                <SignalVizPanelClient />
+                <LivePoseFusionClient />
+              </div>
+            </div>
+          )}
+
           {activePage === "workflow" && (
             <div className="p-6 max-w-6xl space-y-4">
               <div className="rounded-xl px-4 py-3 sm:px-5 sm:py-4" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
@@ -1020,6 +1082,9 @@ export default function Home() {
                   This is the single source for workflow, logic, clinical usage, research basis, and privacy boundaries.
                   It mirrors the current implementation in the scan API and CSI processing modules.
                 </p>
+                <a href="/methodology" target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 mt-3 text-xs font-semibold" style={{ color: "#22d3ee" }}>
+                  Open full scientific whitepaper ↗
+                </a>
               </div>
               <TrustNavigation forceOpen="workflow" />
             </div>
