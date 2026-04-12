@@ -2,130 +2,310 @@
 
 import { useState } from "react";
 
+type PanelColor = "sky" | "purple" | "emerald" | "amber" | "rose";
+
+interface PanelStep {
+  step: string;
+  heading: string;
+  icon: string;
+  body: string;
+  detail?: string;
+}
+
+interface PanelFlowNode {
+  label: string;
+  note: string;
+}
+
+interface PanelReference {
+  title: string;
+  href: string;
+  detail: string;
+}
+
+interface Panel {
+  icon: string;
+  label: string;
+  title: string;
+  objective: string;
+  color: PanelColor;
+  flow?: PanelFlowNode[];
+  content: PanelStep[];
+  references?: PanelReference[];
+}
+
 // ─── Panel content ─────────────────────────────────────────────────────────────
 
-const PANELS = {
+const PANELS: Record<"workflow" | "logic" | "clinical" | "research" | "privacy", Panel> = {
   workflow: {
     icon: "⚡",
     label: "Workflow",
-    title: "How the Scan Works",
+    title: "End-to-End CSI Workflow",
+    objective: "RF sensing pipeline with mechanical and DSP terms from capture to clinical summary.",
     color: "sky",
+    flow: [
+      { label: "RF propagation", note: "OFDM subcarriers + multipath scattering" },
+      { label: "CSI capture", note: "A(f,t) and optional phase phi(f,t)" },
+      { label: "Signal conditioning", note: "Mean-centering + IIR band-pass windows" },
+      { label: "Breathing channel", note: "0.1-0.5 Hz + zero-crossing RPM" },
+      { label: "Cardiac channel", note: "0.8-2.0 Hz + zero-crossing BPM + HRV" },
+      { label: "Pose inference", note: "Subcarrier zones -> 17 COCO keypoints" },
+      { label: "Temporal inference", note: "DFT dominant frequency + activity class" },
+      { label: "Clinical synthesis", note: "Anthropometrics + Qwen/fallback JSON" },
+    ],
     content: [
       {
-        step: "01", heading: "Signal Emission", icon: "📡",
-        body: "Your WiFi router continuously emits 5 GHz radio waves at 100–200 frames/sec. No special hardware is required beyond your existing home or clinic WiFi.",
+        step: "01",
+        heading: "RF mechanics and sensing medium",
+        icon: "📥",
+        body: "Human chest and torso micro-motion perturb OFDM multipath channels. In channel terms, the received response H(f,t) changes in amplitude and phase as body posture and respiration evolve.",
+        detail: "Terminology: OFDM, subcarriers, multipath fading, dielectric scattering.",
       },
       {
-        step: "02", heading: "CSI Capture", icon: "💾",
-        body: "An ESP32-S3 sensor node (or simulated data file) captures Channel State Information — the amplitude and phase of each OFDM subcarrier across 3–4 antenna paths.",
+        step: "02",
+        heading: "CSI ingestion and normalization",
+        icon: "🧩",
+        body: "Service handlers split by source: File Upload (validated JSONL/proof/binary), Live Device (UDP pre-scan packet gate), and Simulate (synthetic CSI). Each source is normalized into the same ParsedCSI contract.",
+        detail: "Handlers: `/api/scan/upload`, `/api/scan` live/simulate, and `/api/v1/status` for mesh health.",
       },
       {
-        step: "03", heading: "DSP Processing", icon: "🔬",
-        body: "Our backend applies bandpass filters (0.1–0.5 Hz for breathing, 0.8–2.0 Hz for heartbeat), extracts vitals, and maps subcarrier spatial variance to skeletal keypoints.",
+        step: "03",
+        heading: "Breathing extraction (respiratory band)",
+        icon: "💓",
+        body: "Amplitude time-series is mean-centered, then filtered with a 0.1-0.5 Hz band-pass to isolate respiratory components caused by chest wall displacement.",
+        detail: "Breathing RPM is derived by zero-crossing rate in `extractVitals`.",
       },
       {
-        step: "04", heading: "AI Analysis", icon: "🤖",
-        body: "The 17 anatomical keypoints and vitals are sent to Qwen-Plus (Alibaba Cloud DashScope). The model generates a clinically informed body composition report.",
+        step: "04",
+        heading: "Heart-rate and HRV extraction (cardiac band)",
+        icon: "🧍",
+        body: "A second band-pass (0.8-2.0 Hz) isolates cardiac micro-motion. Zero-crossing estimates BPM, while peak intervals are used to compute RMSSD-style HRV.",
+        detail: "Functions: `zeroCrossingRate`, `findPeaks`, `calculateHRV`.",
       },
       {
-        step: "05", heading: "Report", icon: "📋",
-        body: "You receive body fat %, estimated waist size, posture notes, and tailored health recommendations — all without any camera or physical contact.",
+        step: "05",
+        heading: "Spatial pose reconstruction",
+        icon: "📏",
+        body: "Normalized subcarrier energy is partitioned into body zones (head, shoulders, torso, hips, thighs, calves) and projected into 17 COCO keypoints.",
+        detail: "Function: `estimatePoseFromCSI` with `buildKeypointsFromProportions`.",
+      },
+      {
+        step: "06",
+        heading: "Temporal activity inference",
+        icon: "🤖",
+        body: "Sliding-window features estimate dominant motion frequency (small DFT scan), motion energy, and phase stability to classify standing/walking/sitting/fallen.",
+        detail: "Function: `analyzeTemporalPose` + `classifyActivity`.",
+      },
+      {
+        step: "07",
+        heading: "Anthropometrics and plausibility gate",
+        icon: "✅",
+        body: "Keypoint geometry is transformed into shoulder/hip/torso/limb measurements, then constrained by anatomical ranges to prevent unrealistic oversized simulated outputs.",
+        detail: "Functions: `computeBodyMetrics`, `stabilizeBodyMetrics`, `estimateCircumferences`.",
+      },
+      {
+        step: "08",
+        heading: "Clinical synthesis and fallback path",
+        icon: "🧾",
+        body: "Derived metrics and confidence are sent to Qwen with strict JSON schema. If unavailable, deterministic rule-based logic returns the same output shape. Live mode never falls back to mock data when hardware is missing.",
+        detail: "Functions: `buildPrompt`, `callQwenAPI`, `ruleBasedAnalysis`, plus `HardwareNotFoundError` gate for live scans.",
+      },
+    ],
+    references: [
+      {
+        title: "RuView README: CSI bands and keypoint pipeline",
+        href: "https://github.com/ruvnet/RuView",
+        detail: "Documents 0.1-0.5 Hz breathing, 0.8-2.0 Hz heart-rate, and 17-keypoint CSI pose mapping.",
+      },
+      {
+        title: "DensePose From WiFi (arXiv:2301.00250)",
+        href: "https://arxiv.org/abs/2301.00250",
+        detail: "Research basis for mapping WiFi amplitude/phase to dense pose information.",
+      },
+      {
+        title: "Channel State Information (CSI) concept",
+        href: "https://en.wikipedia.org/wiki/Channel_state_information",
+        detail: "Background on channel response modeling and propagation effects.",
+      },
+      {
+        title: "Band-pass filtering fundamentals",
+        href: "https://en.wikipedia.org/wiki/Band-pass_filter",
+        detail: "Reference for passband/stopband behavior used in respiratory and cardiac extraction.",
       },
     ],
   },
-  science: {
-    icon: "🧪",
-    label: "Science",
-    title: "The Physics Behind WiFi-CSI Sensing",
+  logic: {
+    icon: "🧠",
+    label: "Logic",
+    title: "Decision Logic and Safety Rails",
+    objective: "How the system handles uncertainty, fallbacks, and output consistency.",
     color: "purple",
+    flow: [
+      { label: "Validate", note: "Reject missing/invalid files" },
+      { label: "Score", note: "Compute confidence from motion + phase stability" },
+      { label: "Branch", note: "Use Qwen when valid response exists" },
+      { label: "Fallback", note: "Rule-based analysis when Qwen fails" },
+      { label: "Normalize", note: "Return consistent output shape" },
+    ],
     content: [
       {
-        step: "RF", heading: "CSI vs RSSI", icon: "📶",
-        body: "RSSI (signal strength) collapses the entire channel to one number. CSI preserves the complex amplitude and phase per subcarrier per antenna — a vastly richer fingerprint of the physical space.",
+        step: "G1",
+        heading: "Input gates",
+        icon: "🚧",
+        body: "Missing file and parse errors are surfaced as explicit API errors (400/422), not silent failures.",
       },
       {
-        step: "EM", heading: "Human Body Interaction", icon: "🫀",
-        body: "The human torso is ~60% water — a highly dielectric material. It scatters, absorbs, and reflects radio waves in ways that encode body dimensions and movements into CSI amplitude patterns.",
+        step: "G2",
+        heading: "Signal quality aware confidence",
+        icon: "📈",
+        body: "Temporal confidence combines phase stability and motion score so downstream logic reflects signal reliability.",
       },
       {
-        step: "DSP", heading: "Breathing & Heart Rate", icon: "🌊",
-        body: "Chest wall displacement during breathing (≈0.3–0.5 Hz) and cardiac motion (≈0.8–1.5 Hz) modulate CSI amplitude. Bandpass filtering isolates these frequency bands with sub-cm precision.",
+        step: "G3",
+        heading: "Structured AI contract",
+        icon: "📐",
+        body: "Qwen is prompted for strict JSON schema output to keep frontend rendering deterministic.",
       },
       {
-        step: "ML", heading: "Pose via RF Imaging", icon: "🦾",
-        body: "Spatial variance across subcarriers encodes the 2D projection of body mass distribution. Deep learning models (WiFlow / DensePose-RF) reconstruct full 17-keypoint COCO skeletons from this data.",
+        step: "G4",
+        heading: "Deterministic fallback path",
+        icon: "🛟",
+        body: "If no API key, network failure, or invalid model response, rule-based analysis still returns complete clinical fields.",
+      },
+      {
+        step: "G5",
+        heading: "Traceable output source",
+        icon: "🏷️",
+        body: "Each analysis includes `source: qwen | rule-based`, making interpretation and debugging transparent.",
       },
     ],
   },
   clinical: {
     icon: "🏥",
     label: "Clinical",
-    title: "Clinical Context & Validation",
+    title: "Clinical Usage Workflow",
+    objective: "A practical clinic-facing sequence for using the scan output responsibly.",
     color: "emerald",
-    content: [
-      {
-        step: "BF%", heading: "Body Fat Estimation", icon: "📊",
-        body: "Our model correlates shoulder-to-hip ratio, torso depth, and skeletal proportions with DXA-validated body fat percentage ranges. Accuracy is ±3–4% compared to gold-standard DEXA scans.",
-      },
-      {
-        step: "HRV", heading: "Heart Rate Variability", icon: "💓",
-        body: "HRV (RMSSD) is an established marker of autonomic nervous system health. Values >50 ms indicate strong parasympathetic tone; <20 ms may signal chronic stress or overtraining.",
-      },
-      {
-        step: "WHR", heading: "Waist-to-Hip Ratio", icon: "📏",
-        body: "WHO guidelines: WHR >0.90 (men) / >0.85 (women) indicates abdominal obesity, a risk factor for cardiovascular disease and type 2 diabetes.",
-      },
-      {
-        step: "⚠", heading: "Medical Disclaimer", icon: "⚠️",
-        body: "This system is a wellness screening tool, not a diagnostic medical device. Always consult a licensed physician for medical decisions. Data is processed locally; no personal information is transmitted.",
-      },
+    flow: [
+      { label: "Baseline", note: "Capture first scan with context notes" },
+      { label: "Compare", note: "Track trends across repeated scans" },
+      { label: "Triage", note: "Flag elevated risk patterns" },
+      { label: "Escalate", note: "Route to clinician when needed" },
+      { label: "Follow-up", note: "Re-scan after intervention" },
     ],
-  },
-  privacy: {
-    icon: "🔒",
-    label: "Privacy",
-    title: "Privacy-First Architecture",
-    color: "amber",
     content: [
       {
-        step: "No📷", heading: "Zero Camera Dependency", icon: "📷",
-        body: "The system captures radio signals, not images. At no point is a photograph, video frame, or visual representation of the person created. Completely GDPR and HIPAA compatible by design.",
+        step: "C1",
+        heading: "Baseline assessment",
+        icon: "🧾",
+        body: "Start with one baseline scan to capture vitals, body-fat class, and posture profile in a stable environment.",
       },
       {
-        step: "RF", heading: "Signals On-Device", icon: "🖥️",
-        body: "Raw CSI data is processed entirely on the local server. Only the final structured health metrics (numbers) are sent to the Qwen AI API — never raw sensor data.",
+        step: "C2",
+        heading: "Trend-first interpretation",
+        icon: "📊",
+        body: "Use repeated measurements to identify directional change (improving, stable, worsening), not one-off diagnosis.",
       },
       {
-        step: "🔐", heading: "No Persistent Storage", icon: "🗑️",
-        body: "Scan results are not stored after the session unless you explicitly export them. No user profile, no biometric database, no data retention.",
+        step: "C3",
+        heading: "Risk triage cues",
+        icon: "⚠️",
+        body: "Elevated heart rate, low HRV trends, and worsening body-fat class should trigger clinician review.",
       },
       {
-        step: "Open", heading: "Open Science", icon: "📂",
-        body: "The sensing pipeline is based on the open-source RuView / WiFi-DensePose research project. Full methodology is publicly auditable at github.com/ruvnet/wifi-densepose.",
+        step: "C4",
+        heading: "Intervention loop",
+        icon: "🔁",
+        body: "Pair recommendations (activity, breathing practice, lifestyle) with scheduled follow-up scans to quantify response.",
+      },
+      {
+        step: "C5",
+        heading: "Scope boundary",
+        icon: "🩺",
+        body: "This is a wellness screening assistant, not a standalone medical diagnosis tool.",
       },
     ],
   },
   research: {
     icon: "📚",
     label: "Research",
-    title: "Academic & Industry Basis",
+    title: "Evidence and Technical Foundation",
+    objective: "How this implementation maps to published WiFi sensing research and RuView architecture.",
     color: "rose",
     content: [
       {
-        step: "1", heading: "WiFi-DensePose (2023)", icon: "📄",
-        body: "KAIST & CMU paper demonstrating COCO-DensePose skeleton reconstruction from commodity WiFi CSI with median PCKh@0.5 accuracy of 87.2% — comparable to monocular RGB cameras.",
+        step: "R1",
+        heading: "Dense pose from WiFi",
+        icon: "📄",
+        body: "CMU work shows phase + amplitude can map to dense human pose regions, supporting camera-free sensing pipelines.",
       },
       {
-        step: "2", heading: "WiPose (2021)", icon: "📄",
-        body: "IEEE TMC paper showing 3D human pose from single access point CSI using a Fresnel zone model and LSTM temporal smoother. Formed the basis for ESP32-S3 deployment.",
+        step: "R2",
+        heading: "RuView implementation lineage",
+        icon: "🧬",
+        body: "RuView documents CSI-based vitals, activity inference, and 17-keypoint pose pipelines that this app adapts.",
       },
       {
-        step: "3", heading: "RespWatch (2022)", icon: "📄",
-        body: "Nature Scientific Reports — contactless breathing and heart rate monitoring using OFDM subcarrier phase, achieving <0.5 BPM error over a 5-metre range.",
+        step: "R3",
+        heading: "Commodity hardware focus",
+        icon: "📡",
+        body: "The solution emphasizes low-cost ESP32 and standard WiFi infrastructure for practical deployment.",
       },
       {
-        step: "Q", heading: "Qwen-Plus Integration", icon: "🤖",
-        body: "Alibaba Cloud's Qwen-Plus (72B parameters) provides the clinical language reasoning layer, synthesising RF-derived body metrics into human-readable health insights aligned with WHO and AHA guidelines.",
+        step: "R4",
+        heading: "Known limitations",
+        icon: "🔍",
+        body: "Accuracy remains environment-sensitive; robust deployment needs calibration, trend monitoring, and transparent confidence cues.",
+      },
+    ],
+    references: [
+      {
+        title: "DensePose From WiFi (arXiv:2301.00250)",
+        href: "https://arxiv.org/abs/2301.00250",
+        detail: "Primary research on dense correspondence from WiFi CSI.",
+      },
+      {
+        title: "CMU RI publication page",
+        href: "https://www.ri.cmu.edu/publications/dense-human-pose-estimation-from-wifi/",
+        detail: "Summary of motivation, method, and privacy implications.",
+      },
+      {
+        title: "RuView project documentation",
+        href: "https://github.com/ruvnet/RuView",
+        detail: "Open-source reference implementation and architecture.",
+      },
+    ],
+  },
+  privacy: {
+    icon: "🔒",
+    label: "Privacy",
+    title: "Privacy and Data Boundaries",
+    objective: "What the system sees, what it sends, and what it does not retain by default.",
+    color: "amber",
+    content: [
+      {
+        step: "P1",
+        heading: "No camera imagery",
+        icon: "🚫📷",
+        body: "The pipeline processes RF signal dynamics and derived metrics, not photos or video frames.",
+      },
+      {
+        step: "P2",
+        heading: "Local signal processing",
+        icon: "🖥️",
+        body: "CSI parsing, filtering, and pose inference run locally before high-level metrics are summarized.",
+      },
+      {
+        step: "P3",
+        heading: "Controlled external payload",
+        icon: "📤",
+        body: "Only structured derived metrics are sent to Qwen for language synthesis; raw CSI matrices stay local.",
+      },
+      {
+        step: "P4",
+        heading: "Session-oriented usage",
+        icon: "🧹",
+        body: "Default usage focuses on immediate interpretation rather than long-term personal biometric storage.",
       },
     ],
   },
@@ -133,7 +313,7 @@ const PANELS = {
 
 type PanelKey = keyof typeof PANELS;
 
-const COLOR_MAP: Record<string, string> = {
+const COLOR_MAP: Record<PanelColor, string> = {
   sky: "text-sky-400 border-sky-500/30 bg-sky-500/10",
   purple: "text-purple-400 border-purple-500/30 bg-purple-500/10",
   emerald: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
@@ -141,11 +321,11 @@ const COLOR_MAP: Record<string, string> = {
   rose: "text-rose-400 border-rose-500/30 bg-rose-500/10",
 };
 
-export default function TrustNavigation({ forceOpen }: { forceOpen?: string }) {
-  const [open, setOpen] = useState<PanelKey | null>((forceOpen as PanelKey) ?? null);
+export default function TrustNavigation({ forceOpen }: { forceOpen?: PanelKey }) {
+  const [open, setOpen] = useState<PanelKey | null>(forceOpen ?? "workflow");
 
   return (
-    <>
+    <section className="space-y-3">
       {/* Trust Nav Bar */}
       <nav className="flex items-center gap-1 flex-wrap">
         {(Object.keys(PANELS) as PanelKey[]).map((key) => {
@@ -173,19 +353,45 @@ export default function TrustNavigation({ forceOpen }: { forceOpen?: string }) {
       {open && (() => {
         const panel = PANELS[open];
         const colorClass = COLOR_MAP[panel.color] ?? COLOR_MAP.sky;
+        const flowNodes = panel.flow ?? [];
         return (
           <div className="w-full mt-3 rounded-xl overflow-hidden animate-[fadeIn_0.2s_ease-out]"
             style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b"
+            <div className="flex items-start justify-between px-4 py-3 border-b gap-4"
               style={{ borderColor: "var(--color-border)", background: "var(--color-surface-1)" }}>
               <div className="flex items-center gap-2.5">
-                <span>{panel.icon}</span>
-                <h3 className="font-semibold text-sm" style={{ color: "var(--color-text-primary)" }}>{panel.title}</h3>
+                <span className="mt-0.5">{panel.icon}</span>
+                <div>
+                  <h3 className="font-semibold text-sm" style={{ color: "var(--color-text-primary)" }}>{panel.title}</h3>
+                  <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{panel.objective}</p>
+                </div>
               </div>
               <button onClick={() => setOpen(null)} className="text-lg leading-none"
                 style={{ color: "var(--color-text-muted)" }}>×</button>
             </div>
+
+            {/* Flow diagram */}
+            {flowNodes.length > 0 && (
+              <div className="px-4 py-3 border-b" style={{ borderColor: "var(--color-border)" }}>
+                <p className="text-[11px] uppercase tracking-wide mb-2" style={{ color: "var(--color-text-muted)" }}>
+                  Workflow diagram
+                </p>
+                <div className="flex flex-wrap items-stretch gap-1.5">
+                  {flowNodes.map((node, idx) => (
+                    <div key={`${node.label}-${idx}`} className="flex items-center gap-1.5">
+                      <div className={`rounded-md border px-2 py-1.5 min-w-[130px] ${colorClass}`}>
+                        <p className="text-[11px] font-semibold leading-tight">{idx + 1}. {node.label}</p>
+                        <p className="text-[11px] leading-tight mt-0.5 opacity-90">{node.note}</p>
+                      </div>
+                      {idx < flowNodes.length - 1 && (
+                        <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>→</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Steps */}
             <div>
@@ -203,14 +409,39 @@ export default function TrustNavigation({ forceOpen }: { forceOpen?: string }) {
                       <span className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>{item.heading}</span>
                     </div>
                     <p className="text-xs leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>{item.body}</p>
+                    {item.detail && (
+                      <p className="text-[11px] mt-1.5 leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                        {item.detail}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
+
+            {panel.references && panel.references.length > 0 && (
+              <div className="px-4 py-3 border-t" style={{ borderColor: "var(--color-border)", background: "var(--color-surface-1)" }}>
+                <p className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>Sources</p>
+                <div className="mt-2 space-y-1.5">
+                  {panel.references.map((ref) => (
+                    <a
+                      key={ref.href}
+                      href={ref.href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-md px-2 py-1.5 text-xs hover:bg-white/5 transition-colors"
+                      style={{ border: "1px solid var(--color-border)", color: "var(--color-text-secondary)" }}
+                    >
+                      <p className="font-medium" style={{ color: "var(--color-text-primary)" }}>{ref.title}</p>
+                      <p className="mt-0.5">{ref.detail}</p>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
-    </>
+    </section>
   );
 }
-

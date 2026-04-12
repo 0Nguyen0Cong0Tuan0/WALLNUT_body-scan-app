@@ -34,6 +34,7 @@ import argparse
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
+import numpy as np
 
 # ─── Add RuView to path ───────────────────────────────────────────────────────
 REPO_ROOT = Path(__file__).parent.parent.parent / "RuView"
@@ -189,8 +190,6 @@ def generate_proof_bundle(
     path_phase_offsets = rng.uniform(-3.14, 3.14, size=(3, num_antennas))
     breathing_phases = rng.uniform(0, 2 * 3.14, size=num_antennas)
     walking_phases = rng.uniform(0, 2 * 3.14, size=num_antennas)
-
-    import numpy as np
 
     k_indices = np.arange(num_subcarriers) - num_subcarriers // 2
     subcarrier_freqs = center_freq + k_indices * subcarrier_spacing

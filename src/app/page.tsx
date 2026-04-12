@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, Suspense, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
 import TrustNavigation from "@/components/TrustNavigation";
 import type { RuViewFrame } from "@/lib/ruviewSimulator";
@@ -30,6 +30,63 @@ interface Analysis {
 interface CsiMeta {
   format: string; numFrames: number; durationSeconds: number;
   sampleRateHz: number; numAntennas: number; numSubcarriers: number;
+}
+
+interface PoseKeypoint {
+  point: string;
+  x: number;
+  y: number;
+  confidence: number;
+  z?: number;
+}
+
+interface PoseSequenceFrame {
+  t: number;
+  keypoints: PoseKeypoint[];
+  confidence: number;
+  motionScore: number;
+}
+
+interface TemporalMeta {
+  activity: string;
+  activityConfidence: number;
+  dominantMotionHz: number;
+  breathingHz: number;
+  motionEnergy: number;
+  phaseStability: number;
+  fps: number;
+  sequenceLength: number;
+  durationSeconds: number;
+}
+
+type ScanFrame = Omit<RuViewFrame, "keypoints"> & {
+  keypoints: PoseKeypoint[];
+  keypointSequence?: PoseSequenceFrame[];
+  temporal?: TemporalMeta;
+  csiMeta?: CsiMeta;
+};
+
+interface ScanRequest {
+  mode: InputMode;
+  file?: File;
+  livePort?: number;
+}
+
+interface LiveStatusNode {
+  nodeId: number;
+  healthy: boolean;
+  ageMs: number;
+}
+
+interface LiveStatusResponse {
+  success: boolean;
+  status?: {
+    port: number;
+    healthy: boolean;
+    activeNodes: number;
+    nodes: LiveStatusNode[];
+  };
+  error?: string;
 }
 
 // ─── Icons (inline SVG — no emoji) ───────────────────────────────────────────
@@ -165,12 +222,12 @@ function FileDropZone({ onFile }: { onFile: (f: File) => void }) {
         }`}
         style={{ borderColor: dragging ? "" : "var(--color-border)" }}
       >
-        <input ref={ref} type="file" accept=".json,.jsonl,.csi.jsonl" className="hidden"
+        <input ref={ref} type="file" accept=".json,.jsonl,.csi.jsonl,.bin,.csi.bin" className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) accept(f); }} />
         <div className="w-8 h-8 text-cyan-500"><Icon.Upload /></div>
         <div>
           <p className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>Drop CSI file here</p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>.csi.jsonl or sample_csi_data.json</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>.csi.jsonl, proof JSON, or RuView .bin</p>
         </div>
       </div>
 
@@ -189,7 +246,7 @@ function FileDropZone({ onFile }: { onFile: (f: File) => void }) {
 }
 
 // ─── Processing View ──────────────────────────────────────────────────────────
-function ProcessingView({ state }: { state: ScanState }) {
+function ProcessingView({ state, progress }: { state: ScanState; progress?: number | null }) {
   const steps = [
     { id: "processing", label: "DSP Filter & Vital Extraction" },
     { id: "analyzing",  label: "Qwen AI Clinical Analysis" },
@@ -221,6 +278,20 @@ function ProcessingView({ state }: { state: ScanState }) {
             </div>
           );
         })}
+        {typeof progress === "number" && (
+          <div className="pt-2">
+            <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: "var(--color-text-muted)" }}>
+              <span>Upload pipeline</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-border)" }}>
+              <div
+                className="h-full rounded-full bg-cyan-500 transition-all duration-200"
+                style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -228,7 +299,7 @@ function ProcessingView({ state }: { state: ScanState }) {
 
 // ─── Results Panel ────────────────────────────────────────────────────────────
 function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
-  frame: RuViewFrame & { csiMeta?: CsiMeta }; analysis: Analysis;
+  frame: ScanFrame; analysis: Analysis;
   csiMeta?: CsiMeta; inputSource: string; onRescan: () => void;
 }) {
   const fatPct = analysis.bodyFatPercent;
@@ -248,7 +319,7 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
   return (
     <div className="space-y-4 animate-[fadeIn_0.25s_ease-out]">
       {/* Report header */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold" style={{ color: "var(--color-text-primary)" }}>Scan Report</h2>
           <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
@@ -266,7 +337,7 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
 
       {/* CSI Metadata strip */}
       {csiMeta && (
-        <div className="rounded-lg px-4 py-2.5 grid grid-cols-6 gap-3"
+        <div className="rounded-lg px-4 py-2.5 grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6"
           style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
           {[
             ["Format", csiMeta.format], ["Frames", String(csiMeta.numFrames)],
@@ -282,10 +353,16 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
       )}
 
       {/* Main 2-column body */}
-      <div className="grid grid-cols-[340px_1fr] gap-4">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(520px,1.25fr)_minmax(320px,1fr)]">
         {/* Left: 3D Body Viewer + measurement table */}
-        <div className="flex flex-col rounded-xl overflow-hidden" style={{ border: "1px solid var(--color-border)" }}>
+        <div className="flex min-w-0 flex-col rounded-xl overflow-hidden" style={{ border: "1px solid var(--color-border)" }}>
           <Body3DViewer
+            keypoints={frame.keypoints}
+            keypointSequence={frame.keypointSequence}
+            activity={frame.temporal?.activity}
+            dominantMotionHz={frame.temporal?.dominantMotionHz}
+            breathingHz={frame.temporal?.breathingHz}
+            minHeight="clamp(500px, 66vh, 920px)"
             bodyMetrics={frame.bodyMetrics}
             bodyFatPercent={analysis.bodyFatPercent}
             classification={analysis.bodyFatClassification}
@@ -313,7 +390,46 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
         </div>
 
         {/* Right column */}
-        <div className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+          {/* Temporal motion analysis */}
+          {frame.temporal && (
+            <div className="rounded-xl p-4 space-y-3"
+              style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+              <div className="flex items-center justify-between">
+                <p className="label">Motion Replay</p>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold badge-neutral">
+                  {frame.temporal.activity}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="label">Confidence</p>
+                  <p className="metric text-sm" style={{ color: "var(--color-text-primary)" }}>
+                    {(frame.temporal.activityConfidence * 100).toFixed(0)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Frames</p>
+                  <p className="metric text-sm" style={{ color: "var(--color-text-primary)" }}>
+                    {frame.temporal.sequenceLength}
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Dominant motion</p>
+                  <p className="metric text-sm" style={{ color: "var(--color-text-primary)" }}>
+                    {frame.temporal.dominantMotionHz.toFixed(2)} Hz
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Playback rate</p>
+                  <p className="metric text-sm" style={{ color: "var(--color-text-primary)" }}>
+                    {frame.temporal.fps.toFixed(1)} fps
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Body composition */}
           <div className="rounded-xl p-4 space-y-3"
             style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
@@ -375,7 +491,7 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
         <div className="px-4 py-2.5 label" style={{ background: "var(--color-surface-2)", borderBottom: "1px solid var(--color-border)" }}>
           Body Measurements — CSI Spatial Analysis
         </div>
-        <div className="grid grid-cols-3" style={{ background: "var(--color-surface-1)" }}>
+        <div className="grid grid-cols-2 lg:grid-cols-3" style={{ background: "var(--color-surface-1)" }}>
           {[
             ["Left Arm", `${frame.bodyMetrics.leftArmLengthCm} cm`],
             ["Right Arm", `${frame.bodyMetrics.rightArmLengthCm} cm`],
@@ -435,13 +551,62 @@ function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
 }
 
 // ─── Idle / Input Panel ───────────────────────────────────────────────────────
-function InputPanel({ onScan, error }: {
-  onScan: (file?: File) => void;
+function InputPanel({ onScan, error, uploadProgress }: {
+  onScan: (request: ScanRequest) => void;
   error: string | null;
+  uploadProgress: number | null;
 }) {
   const [mode, setMode] = useState<InputMode>("upload");
   const [file, setFile] = useState<File | null>(null);
-  const [wsUrl, setWsUrl] = useState("ws://localhost:5006/csi-stream");
+  const [livePort, setLivePort] = useState("8080");
+  const [liveStatus, setLiveStatus] = useState<LiveStatusResponse["status"] | null>(null);
+  const [liveStatusLoading, setLiveStatusLoading] = useState(false);
+  const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "live") return;
+
+    const parsedPort = Number(livePort);
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setLiveStatus(null);
+      setLiveStatusError("Live port must be between 1 and 65535.");
+      return;
+    }
+
+    let cancelled = false;
+
+    const pullStatus = async () => {
+      try {
+        setLiveStatusLoading(true);
+        const response = await fetch(`/api/v1/status?port=${parsedPort}&timeoutMs=35`, { cache: "no-store" });
+        const data = (await response.json()) as LiveStatusResponse;
+        if (cancelled) return;
+        if (!response.ok || !data.success) {
+          setLiveStatus(null);
+          setLiveStatusError(data.error ?? "Unable to read mesh status.");
+          return;
+        }
+        setLiveStatus(data.status ?? null);
+        setLiveStatusError(null);
+      } catch (statusError) {
+        if (cancelled) return;
+        setLiveStatus(null);
+        setLiveStatusError(statusError instanceof Error ? statusError.message : "Unable to read mesh status.");
+      } finally {
+        if (!cancelled) setLiveStatusLoading(false);
+      }
+    };
+
+    void pullStatus();
+    const intervalId = setInterval(() => {
+      void pullStatus();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [mode, livePort]);
 
   const tabClass = (m: InputMode) =>
     `flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium rounded-md transition-colors cursor-pointer ${
@@ -449,6 +614,10 @@ function InputPanel({ onScan, error }: {
         ? "text-cyan-400 bg-cyan-500/10 border border-cyan-500/30"
         : "border border-transparent hover:border-[var(--color-border)]"
     }`;
+
+  const parsedLivePort = Number(livePort);
+  const validLivePort = Number.isFinite(parsedLivePort) && parsedLivePort >= 1 && parsedLivePort <= 65535;
+  const runDisabled = (mode === "upload" && !file) || (mode === "live" && !validLivePort);
 
   return (
     <div className="space-y-5">
@@ -473,18 +642,44 @@ function InputPanel({ onScan, error }: {
       {mode === "live" && (
         <div className="space-y-3">
           <div className="rounded-lg px-3 py-2.5 text-sm" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)", color: "var(--color-text-secondary)" }}>
-            Requires an ESP32-S3 node running RuView firmware and a running sensing server.
+            Requires active CSI UDP traffic from ESP32 nodes. Live scans are blocked when hardware traffic is absent.
           </div>
           <div>
-            <label className="label block mb-1.5">WebSocket Endpoint</label>
-            <input value={wsUrl} onChange={e => setWsUrl(e.target.value)}
+            <label className="label block mb-1.5">CSI UDP Port</label>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={livePort}
+              onChange={e => setLivePort(e.target.value)}
               className="w-full rounded-lg px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-cyan-500/50"
               style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} />
           </div>
+
+          <div className="rounded-lg px-3 py-2.5 text-xs space-y-1.5" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+            <div className="flex items-center justify-between">
+              <span style={{ color: "var(--color-text-muted)" }}>Mesh health</span>
+              <span style={{ color: liveStatus?.healthy ? "#34d399" : "#f87171" }}>
+                {liveStatusLoading
+                  ? "Checking..."
+                  : liveStatus?.healthy
+                  ? "Healthy"
+                  : "No active nodes"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span style={{ color: "var(--color-text-muted)" }}>Active nodes</span>
+              <span style={{ color: "var(--color-text-primary)" }}>{liveStatus?.activeNodes ?? 0}</span>
+            </div>
+            {liveStatusError && (
+              <p className="text-[11px]" style={{ color: "#f87171" }}>{liveStatusError}</p>
+            )}
+          </div>
+
           <ol className="text-xs space-y-1.5 list-decimal list-inside" style={{ color: "var(--color-text-muted)" }}>
             <li>Flash <code className="text-cyan-500">esp32-csi-node.bin</code> from RuView releases</li>
-            <li>Start sensing server: <code className="text-cyan-500">python v1/src/main.py</code></li>
-            <li>Enter WebSocket URL and connect</li>
+            <li>Start CSI UDP stream (RuView record or sensing service)</li>
+            <li>Use the same UDP port here and run live scan</li>
           </ol>
         </div>
       )}
@@ -501,10 +696,14 @@ function InputPanel({ onScan, error }: {
       <button
         id="run-scan-btn"
         onClick={() => {
-          if (mode === "upload" && !file) return;
-          onScan(mode === "upload" ? file ?? undefined : undefined);
+          if (runDisabled) return;
+          onScan({
+            mode,
+            file: mode === "upload" ? file ?? undefined : undefined,
+            livePort: mode === "live" ? parsedLivePort : undefined,
+          });
         }}
-        disabled={mode === "upload" && !file}
+        disabled={runDisabled}
         className="btn-primary w-full"
       >
         <span className="w-4 h-4"><Icon.Play /></span>
@@ -513,9 +712,24 @@ function InputPanel({ onScan, error }: {
           : mode === "upload"
           ? "Select a file above"
           : mode === "live"
-          ? "Connect & Start Scan"
+          ? "Validate Hardware & Scan"
           : "Run Simulated Scan"}
       </button>
+
+      {mode === "upload" && typeof uploadProgress === "number" && (
+        <div className="rounded-lg p-3" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span style={{ color: "var(--color-text-muted)" }}>File processing progress</span>
+            <span style={{ color: "var(--color-text-primary)" }}>{Math.round(uploadProgress)}%</span>
+          </div>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-border)" }}>
+            <div
+              className="h-full rounded-full bg-cyan-500 transition-all duration-200"
+              style={{ width: `${Math.max(0, Math.min(100, uploadProgress))}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="text-xs text-center text-red-400 px-2 py-1.5 rounded" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>{error}</p>
@@ -529,10 +743,13 @@ function Sidebar({ active, onSelect }: { active: string; onSelect: (v: string) =
   const items = [
     { id: "scan",     label: "Body Scan",     icon: <Icon.Scan /> },
     { id: "vitals",   label: "Vitals",        icon: <Icon.Heart /> },
-    { id: "workflow", label: "Workflow",       icon: <Icon.ChevronRight /> },
+    { id: "workflow", label: "Methodology",   icon: <Icon.Cpu /> },
   ];
   return (
-    <aside className="flex flex-col h-full" style={{ width: "var(--sidebar-w)", background: "var(--color-surface-1)", borderRight: "1px solid var(--color-border)" }}>
+    <aside
+      className="flex w-full shrink-0 flex-col border-b lg:w-[var(--sidebar-w)] lg:border-b-0 lg:border-r"
+      style={{ background: "var(--color-surface-1)", borderColor: "var(--color-border)" }}
+    >
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b" style={{ borderColor: "var(--color-border)" }}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -543,18 +760,20 @@ function Sidebar({ active, onSelect }: { active: string; onSelect: (v: string) =
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-2 py-3 space-y-0.5">
+      <nav className="flex-1 overflow-x-auto px-2 py-2 lg:overflow-visible lg:px-2 lg:py-3">
+        <div className="flex gap-1 lg:flex-col lg:gap-0.5">
         {items.map(item => (
           <button key={item.id} onClick={() => onSelect(item.id)}
-            className={`nav-item ${active === item.id ? "active" : ""}`}>
+            className={`nav-item whitespace-nowrap lg:w-full ${active === item.id ? "active" : ""}`}>
             <span className="w-4 h-4">{item.icon}</span>
             {item.label}
           </button>
         ))}
+        </div>
       </nav>
 
       {/* Footer */}
-      <div className="px-3 py-3 border-t" style={{ borderColor: "var(--color-border)" }}>
+      <div className="hidden px-3 py-3 border-t lg:block" style={{ borderColor: "var(--color-border)" }}>
         <div className="flex items-center gap-2 px-2">
           <LiveDot color="green" />
           <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>CSI Pipeline active</span>
@@ -570,87 +789,124 @@ function Sidebar({ active, onSelect }: { active: string; onSelect: (v: string) =
 // ─── Main App ──────────────────────────────────────────────────────────────────
 export default function Home() {
   const [scanState, setScanState] = useState<ScanState>("idle");
-  const [frame, setFrame] = useState<(RuViewFrame & { csiMeta?: CsiMeta }) | null>(null);
+  const [frame, setFrame] = useState<ScanFrame | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [csiMeta, setCsiMeta] = useState<CsiMeta | undefined>(undefined);
   const [inputSource, setInputSource] = useState("simulated");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activePage, setActivePage] = useState("scan");
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
-  const runScan = useCallback(async (file?: File) => {
+  const runScan = useCallback(async (request: ScanRequest) => {
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     setErrorMsg(null);
     setFrame(null);
     setAnalysis(null);
-    setScanState(file ? "processing" : "connecting");
+    setUploadProgress(null);
+    setScanState(request.mode === "live" ? "connecting" : "processing");
+
     try {
-      let res: Response;
-      if (file) {
+      const applyResult = (data: { frame: ScanFrame; analysis: Analysis; inputSource: string }) => {
+        setFrame(data.frame);
+        setAnalysis(data.analysis);
+        setCsiMeta(data.frame.csiMeta);
+        setInputSource(data.inputSource);
+      };
+
+      if (request.mode === "upload") {
+        if (!request.file) {
+          throw new Error("Please choose a CSI file before starting upload mode.");
+        }
+
         const form = new FormData();
-        form.append("csiFile", file);
-        await new Promise(r => setTimeout(r, 800));
-        setScanState("analyzing");
-        res = await fetch("/api/scan", { method: "POST", body: form });
-      } else {
-        await new Promise(r => setTimeout(r, 1200));
-        setScanState("analyzing");
-        res = await fetch("/api/scan", { method: "POST" });
+        form.append("csiFile", request.file);
+        const startResponse = await fetch("/api/scan/upload", { method: "POST", body: form });
+        const startData = await startResponse.json();
+        if (!startResponse.ok || !startData.success) {
+          throw new Error(startData.error ?? "Upload job failed to start.");
+        }
+
+        const jobId = String(startData.jobId);
+        for (let attempt = 0; attempt < 240; attempt++) {
+          const progressResponse = await fetch(`/api/scan/upload/progress?jobId=${encodeURIComponent(jobId)}`, {
+            cache: "no-store",
+          });
+          const progressData = await progressResponse.json();
+          if (!progressResponse.ok || !progressData.success) {
+            throw new Error(progressData.error ?? "Unable to read upload progress.");
+          }
+
+          const progressValue = Number(progressData.progress ?? 0);
+          setUploadProgress(Number.isFinite(progressValue) ? progressValue : null);
+
+          const stage = String(progressData.stage ?? "");
+          if (stage === "validating" || stage === "decoding_binary" || stage === "parsing") {
+            setScanState("processing");
+          } else if (stage === "inference") {
+            setScanState("analyzing");
+          }
+
+          if (stage === "completed" && progressData.result) {
+            applyResult(progressData.result as { frame: ScanFrame; analysis: Analysis; inputSource: string });
+            setScanState("results");
+            setUploadProgress(100);
+            return;
+          }
+
+          if (stage === "failed") {
+            throw new Error(progressData.error?.message ?? "Upload processing failed.");
+          }
+
+          await sleep(250);
+        }
+
+        throw new Error("Upload processing timed out.");
       }
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error ?? "Unknown error");
-      setFrame(data.frame);
-      setAnalysis(data.analysis);
-      setCsiMeta(data.frame.csiMeta);
-      setInputSource(data.inputSource);
+
+      setScanState(request.mode === "live" ? "connecting" : "processing");
+      const response = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: request.mode,
+          livePort: request.livePort,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "Scan failed.");
+      }
+
+      setScanState("analyzing");
+      applyResult(data as { frame: ScanFrame; analysis: Analysis; inputSource: string });
       setScanState("results");
     } catch (err) {
       setErrorMsg(String(err));
       setScanState("error");
+      setUploadProgress(null);
     }
   }, []);
 
-  const handleReset = () => { setScanState("idle"); setFrame(null); setAnalysis(null); setErrorMsg(null); };
+  const handleReset = () => { setScanState("idle"); setFrame(null); setAnalysis(null); setErrorMsg(null); setUploadProgress(null); };
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ fontFamily: "var(--font-sans)" }}>
+    <div className="flex min-h-screen h-dvh flex-col overflow-hidden lg:flex-row" style={{ fontFamily: "var(--font-sans)" }}>
       <Sidebar active={activePage} onSelect={setActivePage} />
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
-        <header className="flex items-center justify-between px-6 py-3.5 flex-shrink-0"
-          style={{ background: "var(--color-surface-1)", borderBottom: "1px solid var(--color-border)" }}>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              {activePage === "scan" ? "Body Composition Scan"
-               : activePage === "vitals" ? "Vitals Monitor"
-               : "Clinical Workflow"}
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-              WiFi-CSI sensing · Camera-free · Privacy-first
-            </p>
-          </div>
-
-          {/* Trust nav in top-right */}
-          <div className="flex items-center gap-3">
-            <TrustNavigation />
-            <div className="flex items-center gap-2 pl-3 border-l" style={{ borderColor: "var(--color-border)" }}>
-              <LiveDot color="cyan" />
-              <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>by Elfie × Qwen AI</span>
-            </div>
-          </div>
-        </header>
-
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Content */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto min-h-0">
           {activePage === "scan" && (
-            <div className="grid grid-cols-[340px_1fr] gap-0 h-full">
+            <div className="grid h-full min-h-0 grid-cols-1 xl:grid-cols-[minmax(320px,360px)_minmax(0,1fr)]">
               {/* Left panel — input */}
-              <div className="overflow-y-auto p-5 space-y-4" style={{ borderRight: "1px solid var(--color-border)" }}>
-                <InputPanel onScan={runScan} error={errorMsg} />
+              <div className="overflow-y-auto p-4 space-y-4 sm:p-5 border-b xl:border-b-0 xl:border-r" style={{ borderColor: "var(--color-border)" }}>
+                <InputPanel onScan={runScan} error={errorMsg} uploadProgress={uploadProgress} />
               </div>
 
               {/* Right panel — results / states */}
-              <div className="overflow-y-auto p-5">
+              <div className="overflow-y-auto p-4 sm:p-5 min-w-0">
                 {scanState === "idle" && (
                   <div className="flex flex-col items-center justify-center h-full min-h-[400px] gap-4">
                     <div style={{ color: "var(--color-border-hi)" }}>
@@ -667,7 +923,7 @@ export default function Home() {
                   </div>
                 )}
                 {(scanState === "connecting" || scanState === "processing" || scanState === "analyzing") && (
-                  <ProcessingView state={scanState} />
+                  <ProcessingView state={scanState} progress={uploadProgress} />
                 )}
                 {scanState === "error" && (
                   <div className="rounded-xl p-5 space-y-3 max-w-lg"
@@ -694,7 +950,14 @@ export default function Home() {
           )}
 
           {activePage === "workflow" && (
-            <div className="p-6 max-w-2xl">
+            <div className="p-6 max-w-6xl space-y-4">
+              <div className="rounded-xl px-4 py-3 sm:px-5 sm:py-4" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+                <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Methodology Hub</p>
+                <p className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                  This is the single source for workflow, logic, clinical usage, research basis, and privacy boundaries.
+                  It mirrors the current implementation in the scan API and CSI processing modules.
+                </p>
+              </div>
               <TrustNavigation forceOpen="workflow" />
             </div>
           )}
