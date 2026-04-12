@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Icon } from "@/components/ui/Icons";
 import { FileDropZone } from "./FileDropZone";
-import { InputMode, ScanRequest } from "./types";
+import { AnalysisModelId, AnalysisModelOption, InputMode, ScanRequest } from "./types";
 
 interface LiveStatusNode {
   nodeId: number;
@@ -22,6 +22,18 @@ interface LiveStatusResponse {
   error?: string;
 }
 
+interface AnalysisModelsResponse {
+  success: boolean;
+  models?: AnalysisModelOption[];
+  error?: string;
+}
+
+function formatQuota(model: AnalysisModelOption): string {
+  if (model.quota.source === "none") return "N/A";
+  if (model.quota.limitCalls === null || model.quota.remainingCalls === null) return "Unbounded";
+  return `${model.quota.remainingCalls}/${model.quota.limitCalls} calls`;
+}
+
 export function InputPanel({ onScan, error, uploadProgress }: {
   onScan: (request: ScanRequest) => void;
   error: string | null;
@@ -33,6 +45,25 @@ export function InputPanel({ onScan, error, uploadProgress }: {
   const [liveStatus, setLiveStatus] = useState<LiveStatusResponse["status"] | null>(null);
   const [liveStatusLoading, setLiveStatusLoading] = useState(false);
   const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<AnalysisModelOption[]>([
+    {
+      modelId: "none",
+      label: "Skip AI analysis",
+      provider: "none",
+      description: "Use deterministic rule engine only.",
+      enabled: true,
+      skipAnalysis: true,
+      quota: {
+        remainingCalls: null,
+        limitCalls: null,
+        usedCalls: 0,
+        source: "none",
+      },
+    },
+  ]);
+  const [analysisModel, setAnalysisModel] = useState<AnalysisModelId>("none");
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     if (mode !== "live") return;
@@ -79,6 +110,39 @@ export function InputPanel({ onScan, error, uploadProgress }: {
     };
   }, [mode, livePort]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModels = async () => {
+      try {
+        setModelLoading(true);
+        const response = await fetch("/api/v1/analysis/models", { cache: "no-store" });
+        const data = (await response.json()) as AnalysisModelsResponse;
+        if (cancelled) return;
+        if (!response.ok || !data.success || !Array.isArray(data.models)) {
+          throw new Error(data.error ?? "Unable to load analysis models.");
+        }
+        setModelOptions(data.models);
+        setModelError(null);
+        setAnalysisModel((previous) => {
+          const selected = data.models?.find((model) => model.modelId === previous);
+          if (!selected || (!selected.enabled && !selected.skipAnalysis)) return "none";
+          return previous;
+        });
+      } catch (loadError) {
+        if (cancelled) return;
+        setModelError(loadError instanceof Error ? loadError.message : "Unable to load analysis models.");
+      } finally {
+        if (!cancelled) setModelLoading(false);
+      }
+    };
+
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const tabClass = (m: InputMode) =>
     `flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium rounded-md transition-colors cursor-pointer ${
       mode === m
@@ -88,7 +152,14 @@ export function InputPanel({ onScan, error, uploadProgress }: {
 
   const parsedLivePort = Number(livePort);
   const validLivePort = Number.isFinite(parsedLivePort) && parsedLivePort >= 1 && parsedLivePort <= 65535;
-  const runDisabled = (mode === "upload" && !file) || (mode === "live" && !validLivePort);
+  const selectedModel = modelOptions.find((item) => item.modelId === analysisModel);
+  const modelSelectionInvalid = Boolean(
+    selectedModel && !selectedModel.skipAnalysis && !selectedModel.enabled
+  );
+  const runDisabled =
+    (mode === "upload" && !file) ||
+    (mode === "live" && !validLivePort) ||
+    modelSelectionInvalid;
 
   return (
     <div className="space-y-5">
@@ -163,6 +234,51 @@ export function InputPanel({ onScan, error, uploadProgress }: {
         </div>
       )}
 
+      <div className="rounded-lg p-4 space-y-2.5" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+        <p className="label">Model Analysis (Optional)</p>
+        <select
+          value={analysisModel}
+          onChange={(event) => setAnalysisModel(event.target.value as AnalysisModelId)}
+          className="w-full rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-cyan-500/50"
+          style={{ background: "var(--color-surface-1)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
+        >
+          {modelOptions.map((model) => (
+            <option
+              key={model.modelId}
+              value={model.modelId}
+              disabled={!model.enabled && !model.skipAnalysis}
+            >
+              {model.label} ({formatQuota(model)})
+            </option>
+          ))}
+        </select>
+        {modelLoading && (
+          <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            Loading model availability...
+          </p>
+        )}
+        {selectedModel && (
+          <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+            {selectedModel.description}
+          </p>
+        )}
+        {selectedModel && selectedModel.quota.source !== "none" && (
+          <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            Remaining quota: {formatQuota(selectedModel)}
+          </p>
+        )}
+        {selectedModel?.disabledReason && !selectedModel.skipAnalysis && (
+          <p className="text-[11px]" style={{ color: "#f87171" }}>
+            {selectedModel.disabledReason}
+          </p>
+        )}
+        {modelError && (
+          <p className="text-[11px]" style={{ color: "#f87171" }}>
+            {modelError}
+          </p>
+        )}
+      </div>
+
       {/* Action */}
       <button
         id="run-scan-btn"
@@ -172,6 +288,7 @@ export function InputPanel({ onScan, error, uploadProgress }: {
             mode,
             file: mode === "upload" ? file ?? undefined : undefined,
             livePort: mode === "live" ? parsedLivePort : undefined,
+            analysisModel,
           });
         }}
         disabled={runDisabled}

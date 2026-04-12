@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { InputPanel } from "@/features/scan/InputPanel";
 import { ProcessingView } from "@/features/scan/ProcessingView";
 import { ResultsPanel } from "@/features/scan/ResultsPanel";
+import { VitalsTrendsPanel } from "@/features/scan/VitalsTrendsPanel";
 import { useScanController } from "@/features/scan/useScanController";
 
 type AppPage = "scan" | "vitals" | "history" | "workflow";
@@ -18,11 +19,13 @@ export default function Home() {
     frame,
     analysis,
     csiMeta,
+    diagnostics,
     inputSource,
     errorMsg,
     warningMsg,
     uploadProgress,
     activeMode,
+    activeAnalysisModel,
     runScan,
     handleReset,
   } = useScanController();
@@ -73,7 +76,12 @@ export default function Home() {
                   </div>
                 )}
                 {(scanState === "connecting" || scanState === "processing" || scanState === "analyzing") && (
-                  <ProcessingView state={scanState} progress={uploadProgress} mode={activeMode} />
+                  <ProcessingView
+                    state={scanState}
+                    progress={uploadProgress}
+                    mode={activeMode}
+                    analysisModel={activeAnalysisModel}
+                  />
                 )}
                 {scanState === "error" && (
                   <div className="rounded-xl p-5 space-y-3 max-w-lg mt-10"
@@ -84,7 +92,14 @@ export default function Home() {
                   </div>
                 )}
                 {scanState === "results" && frame && analysis && (
-                  <ResultsPanel frame={frame} analysis={analysis} csiMeta={csiMeta} inputSource={inputSource} onRescan={handleReset} />
+                  <ResultsPanel
+                    frame={frame}
+                    analysis={analysis}
+                    diagnostics={diagnostics ?? undefined}
+                    csiMeta={csiMeta}
+                    inputSource={inputSource}
+                    onRescan={handleReset}
+                  />
                 )}
               </div>
             </div>
@@ -92,10 +107,7 @@ export default function Home() {
 
           {activePage === "vitals" && (
             <div className="p-8">
-              <div className="rounded-xl p-10 text-center max-w-lg mx-auto"
-                style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                <p className="text-base" style={{ color: "var(--color-text-muted)" }}>Run a body scan first to view extracted vitals here.</p>
-              </div>
+              <VitalsTrendsPanel />
             </div>
           )}
 

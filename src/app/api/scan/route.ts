@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCsiFile } from "@/lib/csiProcessor";
-import { runInferenceEngine } from "@/lib/inferenceEngine";
 import { assertLiveTraffic, resolveLiveMaxPackets, resolveLivePort, resolveLiveProbeTimeoutMs } from "@/lib/liveCsi";
 import { UnsupportedScanModeError, InvalidCsiFileError } from "@/lib/scanErrors";
 import { generateSimulatedParsedCsi } from "@/lib/simulatedCsi";
 import { buildScanErrorResponse } from "@/app/api/_shared/scanResponses";
+import { processScanInference } from "@/lib/scanPipeline";
 
 export const runtime = "nodejs";
 
 interface ScanRequestBody {
   mode?: "live" | "simulate" | "upload";
   livePort?: number;
+  analysisModel?: string | null;
+  calibrationProfileId?: string | null;
+  baselineId?: string | null;
+  qualityGateMin?: number;
+  driftCompensationStrength?: number;
 }
 
 async function parseRequestBody(req: NextRequest): Promise<ScanRequestBody> {
@@ -46,7 +51,13 @@ export async function POST(req: NextRequest) {
       });
 
       const parsedCsi = parseCsiFile(capture.jsonl);
-      const result = await runInferenceEngine(parsedCsi, `live:udp:${port}`);
+      const result = await processScanInference(parsedCsi, `live:udp:${port}`, {
+        analysisModel: body.analysisModel,
+        calibrationProfileId: body.calibrationProfileId,
+        baselineId: body.baselineId,
+        qualityGateMin: body.qualityGateMin,
+        driftCompensationStrength: body.driftCompensationStrength,
+      });
 
       return NextResponse.json({
         success: true,
@@ -64,7 +75,13 @@ export async function POST(req: NextRequest) {
 
     if (mode === "simulate") {
       const parsed = generateSimulatedParsedCsi();
-      const result = await runInferenceEngine(parsed, "simulated");
+      const result = await processScanInference(parsed, "simulated", {
+        analysisModel: body.analysisModel,
+        calibrationProfileId: body.calibrationProfileId,
+        baselineId: body.baselineId,
+        qualityGateMin: body.qualityGateMin,
+        driftCompensationStrength: body.driftCompensationStrength,
+      });
       return NextResponse.json({
         success: true,
         ...result,

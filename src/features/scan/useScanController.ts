@@ -2,7 +2,15 @@
 
 import { useCallback, useState } from "react";
 import { addScanRecord } from "@/lib/scanHistory";
-import type { Analysis, CsiMeta, ScanFrame, ScanRequest, ScanState } from "./types";
+import type {
+  Analysis,
+  AnalysisModelId,
+  CsiMeta,
+  ScanDiagnostics,
+  ScanFrame,
+  ScanRequest,
+  ScanState,
+} from "./types";
 
 interface UploadStartResponse {
   success: boolean;
@@ -18,6 +26,7 @@ interface UploadProgressResponse {
     frame: ScanFrame;
     analysis: Analysis;
     inputSource: string;
+    diagnostics: ScanDiagnostics;
   };
   error?: {
     message?: string;
@@ -29,6 +38,7 @@ interface ScanResponse {
   frame?: ScanFrame;
   analysis?: Analysis;
   inputSource?: string;
+  diagnostics?: ScanDiagnostics;
   error?: string;
 }
 
@@ -53,20 +63,23 @@ export function useScanController() {
   const [frame, setFrame] = useState<ScanFrame | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [csiMeta, setCsiMeta] = useState<CsiMeta | undefined>(undefined);
+  const [diagnostics, setDiagnostics] = useState<ScanDiagnostics | null>(null);
   const [inputSource, setInputSource] = useState("simulated");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [warningMsg, setWarningMsg] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [activeMode, setActiveMode] = useState<"upload" | "live" | "simulate" | null>(null);
+  const [activeAnalysisModel, setActiveAnalysisModel] = useState<AnalysisModelId>("none");
 
   const applyResult = useCallback(
     (
-      data: { frame: ScanFrame; analysis: Analysis; inputSource: string },
+      data: { frame: ScanFrame; analysis: Analysis; inputSource: string; diagnostics: ScanDiagnostics },
       requestMode: ScanRequest["mode"]
     ) => {
       setFrame(data.frame);
       setAnalysis(data.analysis);
       setCsiMeta(data.frame.csiMeta);
+      setDiagnostics(data.diagnostics);
       setInputSource(data.inputSource);
 
       try {
@@ -107,6 +120,13 @@ export function useScanController() {
 
       const form = new FormData();
       form.append("csiFile", request.file);
+      form.append("analysisModel", request.analysisModel ?? "none");
+      if (request.calibrationProfileId) form.append("calibrationProfileId", request.calibrationProfileId);
+      if (request.baselineId) form.append("baselineId", request.baselineId);
+      if (typeof request.qualityGateMin === "number") form.append("qualityGateMin", String(request.qualityGateMin));
+      if (typeof request.driftCompensationStrength === "number") {
+        form.append("driftCompensationStrength", String(request.driftCompensationStrength));
+      }
 
       const startResponse = await fetch("/api/scan/upload", { method: "POST", body: form });
       const startData = (await startResponse.json()) as UploadStartResponse;
@@ -132,7 +152,7 @@ export function useScanController() {
         if (stage === "validating" || stage === "decoding_binary" || stage === "parsing") {
           setScanState("processing");
         } else if (stage === "inference") {
-          setScanState("analyzing");
+          setScanState(request.analysisModel && request.analysisModel !== "none" ? "analyzing" : "processing");
         }
 
         if (stage === "completed" && progressData.result) {
@@ -159,20 +179,31 @@ export function useScanController() {
       const response = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: request.mode, livePort: request.livePort }),
+        body: JSON.stringify({
+          mode: request.mode,
+          livePort: request.livePort,
+          analysisModel: request.analysisModel ?? "none",
+          calibrationProfileId: request.calibrationProfileId,
+          baselineId: request.baselineId,
+          qualityGateMin: request.qualityGateMin,
+          driftCompensationStrength: request.driftCompensationStrength,
+        }),
       });
 
       const data = (await response.json()) as ScanResponse;
-      if (!response.ok || !data.success || !data.frame || !data.analysis || !data.inputSource) {
+      if (!response.ok || !data.success || !data.frame || !data.analysis || !data.inputSource || !data.diagnostics) {
         throw new Error(data.error ?? "Scan failed.");
       }
 
-      setScanState("analyzing");
+      if (request.analysisModel && request.analysisModel !== "none") {
+        setScanState("analyzing");
+      }
       applyResult(
         {
           frame: data.frame,
           analysis: data.analysis,
           inputSource: data.inputSource,
+          diagnostics: data.diagnostics,
         },
         request.mode
       );
@@ -187,8 +218,10 @@ export function useScanController() {
       setWarningMsg(null);
       setFrame(null);
       setAnalysis(null);
+      setDiagnostics(null);
       setUploadProgress(null);
       setActiveMode(request.mode);
+      setActiveAnalysisModel(request.analysisModel ?? "none");
       setScanState(request.mode === "live" ? "connecting" : "processing");
 
       try {
@@ -211,9 +244,11 @@ export function useScanController() {
     setScanState("idle");
     setFrame(null);
     setAnalysis(null);
+    setDiagnostics(null);
     setErrorMsg(null);
     setWarningMsg(null);
     setUploadProgress(null);
+    setActiveAnalysisModel("none");
   }, []);
 
   return {
@@ -221,11 +256,13 @@ export function useScanController() {
     frame,
     analysis,
     csiMeta,
+    diagnostics,
     inputSource,
     errorMsg,
     warningMsg,
     uploadProgress,
     activeMode,
+    activeAnalysisModel,
     runScan,
     handleReset,
   };

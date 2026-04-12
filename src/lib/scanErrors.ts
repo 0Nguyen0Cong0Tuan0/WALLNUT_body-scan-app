@@ -2,6 +2,11 @@ export type ScanErrorCode =
   | "HARDWARE_NOT_FOUND"
   | "INVALID_CSI_FILE"
   | "MALFORMED_CSI_FRAME"
+  | "SIGNAL_QUALITY_LOW"
+  | "CALIBRATION_NOT_FOUND"
+  | "MODEL_CONFIG_INVALID"
+  | "MODEL_AUTH_FAILED"
+  | "MODEL_PROVIDER_FAILED"
   | "INFERENCE_FAILED"
   | "UNSUPPORTED_SCAN_MODE"
   | "UPLOAD_JOB_NOT_FOUND"
@@ -51,6 +56,41 @@ export class InferenceEngineError extends ScanServiceError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, "INFERENCE_FAILED", 500, details);
     this.name = "InferenceEngineError";
+  }
+}
+
+export class SignalQualityError extends ScanServiceError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "SIGNAL_QUALITY_LOW", 422, details);
+    this.name = "SignalQualityError";
+  }
+}
+
+export class CalibrationNotFoundError extends ScanServiceError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "CALIBRATION_NOT_FOUND", 404, details);
+    this.name = "CalibrationNotFoundError";
+  }
+}
+
+export class ModelConfigError extends ScanServiceError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "MODEL_CONFIG_INVALID", 400, details);
+    this.name = "ModelConfigError";
+  }
+}
+
+export class ModelAuthError extends ScanServiceError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "MODEL_AUTH_FAILED", 401, details);
+    this.name = "ModelAuthError";
+  }
+}
+
+export class ModelProviderError extends ScanServiceError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, "MODEL_PROVIDER_FAILED", 502, details);
+    this.name = "ModelProviderError";
   }
 }
 

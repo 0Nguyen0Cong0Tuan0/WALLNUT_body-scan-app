@@ -1,6 +1,8 @@
 import { parseCsiFile, type CSIFrameRaw, type ParsedCSI } from "@/lib/csiProcessor";
-import { runInferenceEngine, type InferenceResult } from "@/lib/inferenceEngine";
+import type { InferenceResult } from "@/lib/inferenceEngine";
 import { InvalidCsiFileError, type ScanServiceError, toScanServiceError } from "@/lib/scanErrors";
+import { getServerDb, parseJsonField, stringifyJson } from "@/lib/serverDb";
+import { processScanInference, type ScanPipelineOptions } from "@/lib/scanPipeline";
 
 export type UploadJobStage =
   | "queued"
@@ -25,25 +27,89 @@ export interface UploadJobState {
   result?: InferenceResult;
 }
 
-type JobStore = Map<string, UploadJobState>;
-
-const globalWithJobs = globalThis as typeof globalThis & {
-  __RUVIEW_UPLOAD_JOBS__?: JobStore;
+type UploadJobRow = {
+  job_id: string;
+  stage: UploadJobStage;
+  progress: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+  error_code: string | null;
+  error_message: string | null;
+  error_details_json: string | null;
+  result_json: string | null;
 };
-
-const uploadJobs: JobStore = globalWithJobs.__RUVIEW_UPLOAD_JOBS__ ?? new Map<string, UploadJobState>();
-if (!globalWithJobs.__RUVIEW_UPLOAD_JOBS__) {
-  globalWithJobs.__RUVIEW_UPLOAD_JOBS__ = uploadJobs;
-}
 
 function clamp(value: number, minValue: number, maxValue: number): number {
   return Math.min(maxValue, Math.max(minValue, value));
 }
 
+function toUploadJobState(row: UploadJobRow): UploadJobState {
+  const errorDetails = parseJsonField<Record<string, unknown> | undefined>(row.error_details_json, undefined);
+  const result = parseJsonField<InferenceResult | undefined>(row.result_json, undefined);
+  return {
+    jobId: row.job_id,
+    stage: row.stage,
+    progress: row.progress,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+    error:
+      row.error_code && row.error_message
+        ? {
+            code: row.error_code,
+            message: row.error_message,
+            details: errorDetails,
+          }
+        : undefined,
+    result,
+  };
+}
+
+function readUploadJobRow(jobId: string): UploadJobRow | null {
+  const db = getServerDb();
+  const row = db
+    .prepare(
+      `SELECT
+         job_id, stage, progress, created_at_ms, updated_at_ms,
+         error_code, error_message, error_details_json, result_json
+       FROM upload_jobs
+       WHERE job_id = ?`
+    )
+    .get(jobId) as UploadJobRow | undefined;
+  return row ?? null;
+}
+
+function writeUploadJobState(job: UploadJobState): void {
+  const db = getServerDb();
+  db.prepare(
+    `INSERT INTO upload_jobs (
+      job_id, stage, progress, created_at_ms, updated_at_ms,
+      error_code, error_message, error_details_json, result_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id) DO UPDATE SET
+      stage = excluded.stage,
+      progress = excluded.progress,
+      updated_at_ms = excluded.updated_at_ms,
+      error_code = excluded.error_code,
+      error_message = excluded.error_message,
+      error_details_json = excluded.error_details_json,
+      result_json = excluded.result_json`
+  ).run(
+    job.jobId,
+    job.stage,
+    clamp(job.progress, 0, 100),
+    job.createdAtMs,
+    job.updatedAtMs,
+    job.error?.code ?? null,
+    job.error?.message ?? null,
+    job.error?.details ? stringifyJson(job.error.details) : null,
+    job.result ? stringifyJson(job.result) : null
+  );
+}
+
 function setJob(jobId: string, patch: Partial<UploadJobState>): void {
-  const current = uploadJobs.get(jobId);
+  const current = getUploadJob(jobId);
   if (!current) return;
-  uploadJobs.set(jobId, {
+  writeUploadJobState({
     ...current,
     ...patch,
     updatedAtMs: Date.now(),
@@ -51,12 +117,9 @@ function setJob(jobId: string, patch: Partial<UploadJobState>): void {
 }
 
 function cleanupJobs(maxAgeMs = 30 * 60 * 1000): void {
-  const now = Date.now();
-  for (const [jobId, job] of uploadJobs.entries()) {
-    if (now - job.updatedAtMs > maxAgeMs) {
-      uploadJobs.delete(jobId);
-    }
-  }
+  const db = getServerDb();
+  const threshold = Date.now() - Math.max(60_000, Math.round(maxAgeMs));
+  db.prepare(`DELETE FROM upload_jobs WHERE updated_at_ms < ?`).run(threshold);
 }
 
 function looksBinaryPayload(fileName: string, bytes: Uint8Array): boolean {
@@ -235,20 +298,25 @@ async function parseUploadedCsiFile(
   return { parsedCsi, inputSource: `file:${parsedCsi.format}` };
 }
 
-async function processUploadJob(jobId: string, file: File): Promise<void> {
+async function processUploadJob(
+  jobId: string,
+  file: File,
+  options?: ScanPipelineOptions
+): Promise<void> {
   try {
     const { parsedCsi, inputSource } = await parseUploadedCsiFile(file, (stage, progress) => {
       setJob(jobId, { stage, progress: clamp(progress, 0, 100) });
     });
 
     setJob(jobId, { stage: "inference", progress: 76 });
-    const result = await runInferenceEngine(parsedCsi, inputSource);
-    setJob(jobId, { stage: "completed", progress: 100, result });
+    const result = await processScanInference(parsedCsi, inputSource, options);
+    setJob(jobId, { stage: "completed", progress: 100, result, error: undefined });
   } catch (error) {
     const scanError: ScanServiceError = toScanServiceError(error);
     setJob(jobId, {
       stage: "failed",
       progress: 100,
+      result: undefined,
       error: {
         code: scanError.code,
         message: scanError.message,
@@ -258,23 +326,24 @@ async function processUploadJob(jobId: string, file: File): Promise<void> {
   }
 }
 
-export function startUploadJob(file: File): UploadJobState {
+export function startUploadJob(file: File, options?: ScanPipelineOptions): UploadJobState {
   cleanupJobs();
-  const jobId = crypto.randomUUID();
   const now = Date.now();
   const state: UploadJobState = {
-    jobId,
+    jobId: crypto.randomUUID(),
     stage: "queued",
     progress: 0,
     createdAtMs: now,
     updatedAtMs: now,
   };
-  uploadJobs.set(jobId, state);
-  void processUploadJob(jobId, file);
+  writeUploadJobState(state);
+  void processUploadJob(state.jobId, file, options);
   return state;
 }
 
 export function getUploadJob(jobId: string): UploadJobState | null {
-  return uploadJobs.get(jobId) ?? null;
+  const row = readUploadJobRow(jobId);
+  if (!row) return null;
+  return toUploadJobState(row);
 }
 

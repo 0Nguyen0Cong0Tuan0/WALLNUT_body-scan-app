@@ -8,7 +8,7 @@ import { StatBlock } from "@/components/ui/StatBlock";
 import HowItWorks from "@/components/HowItWorks";
 import ChatWithAI from "@/components/ChatWithAI";
 import { estimateCircumferences, MEASUREMENT_ORDER, BodyCircumferences } from "@/lib/anthropometricModel";
-import { ScanFrame, Analysis, CsiMeta } from "./types";
+import { ScanFrame, Analysis, CsiMeta, ScanDiagnostics } from "./types";
 
 // Body3DViewer uses Three.js / WebGL — must be client-only, no SSR
 const Body3DViewer = dynamic(() => import("@/components/Body3DViewer"), {
@@ -29,8 +29,9 @@ function statusBadgeClass(classification: string) {
   return `inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold ${m[classification] ?? "badge-neutral"}`;
 }
 
-export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }: {
+export function ResultsPanel({ frame, analysis, diagnostics, csiMeta, inputSource, onRescan }: {
   frame: ScanFrame; analysis: Analysis;
+  diagnostics?: ScanDiagnostics;
   csiMeta?: CsiMeta; inputSource: string; onRescan: () => void;
 }) {
   const fatPct = analysis.bodyFatPercent;
@@ -80,6 +81,58 @@ export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }
               <p className="metric mt-1 text-base font-medium" style={{ color: "var(--color-text-primary)" }}>{v}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {diagnostics && (
+        <div
+          className="rounded-xl px-5 py-4 space-y-3"
+          style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+        >
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
+              Signal diagnostics
+            </p>
+            <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+              Quality {diagnostics.qualityGrade} ({(diagnostics.qualityScore * 100).toFixed(0)}%) ·
+              Interference {(diagnostics.interferenceScore * 100).toFixed(0)}%
+            </p>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="rounded-lg p-3" style={{ background: "var(--color-surface-1)" }}>
+              <p style={{ color: "var(--color-text-muted)" }}>Gate status</p>
+              <p style={{ color: diagnostics.qualityGatePassed ? "#34d399" : "#f87171" }}>
+                {diagnostics.qualityGatePassed ? "passed" : "failed"}
+              </p>
+            </div>
+            <div className="rounded-lg p-3" style={{ background: "var(--color-surface-1)" }}>
+              <p style={{ color: "var(--color-text-muted)" }}>Multi-person risk</p>
+              <p style={{ color: diagnostics.multiPersonLikely ? "#fbbf24" : "#34d399" }}>
+                {diagnostics.multiPersonLikely ? "likely" : "low"}
+              </p>
+            </div>
+            <div className="rounded-lg p-3" style={{ background: "var(--color-surface-1)" }}>
+              <p style={{ color: "var(--color-text-muted)" }}>Calibration</p>
+              <p style={{ color: "var(--color-text-primary)" }}>
+                {diagnostics.calibration.profileId ?? "default"}
+              </p>
+            </div>
+            <div className="rounded-lg p-3" style={{ background: "var(--color-surface-1)" }}>
+              <p style={{ color: "var(--color-text-muted)" }}>Fusion nodes</p>
+              <p style={{ color: "var(--color-text-primary)" }}>
+                {diagnostics.fusion?.nodeCount ?? 1}
+              </p>
+            </div>
+          </div>
+          {diagnostics.warnings.length > 0 && (
+            <div className="space-y-1">
+              {diagnostics.warnings.map((warning) => (
+                <p key={warning} className="text-xs" style={{ color: "#fbbf24" }}>
+                  - {warning}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

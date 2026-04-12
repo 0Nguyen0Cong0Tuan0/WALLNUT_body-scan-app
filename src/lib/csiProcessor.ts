@@ -45,6 +45,20 @@ export interface PoseKeypoint {
 
 export type DetectedFormat = "jsonl" | "proof_bundle" | "unknown";
 
+export interface ParsedFusionNode {
+  nodeId: number;
+  frameCount: number;
+  meanRssi: number;
+  weight: number;
+}
+
+export interface ParsedFusionMeta {
+  enabled: boolean;
+  strategy: "none" | "weighted_time_aligned";
+  nodeCount: number;
+  nodes: ParsedFusionNode[];
+}
+
 export interface ParsedCSI {
   format: DetectedFormat;
   sampleRateHz: number;
@@ -67,6 +81,8 @@ export interface ParsedCSI {
   subcarrierProfile: number[];
   /** Mean RSSI per frame (Format A) or synthetic fallback (Format B), length = numFrames */
   rssiTimeseries: number[];
+  /** Optional multi-node fusion metadata */
+  fusion?: ParsedFusionMeta;
 }
 
 export interface ExtractedVitals {
@@ -149,6 +165,162 @@ function decodeIqHexToAmplitudes(iqHex: string): number[] {
   return amplitudes;
 }
 
+interface NormalizedJsonlFrame {
+  frame: CSIFrameRaw;
+  amplitudes: number[];
+  tsSeconds: number;
+}
+
+function frameTimestampSeconds(frame: CSIFrameRaw, fallbackIndex: number): number {
+  if (typeof frame.ts_ns === "number" && Number.isFinite(frame.ts_ns)) {
+    return frame.ts_ns / 1e9;
+  }
+  if (typeof frame.timestamp === "number" && Number.isFinite(frame.timestamp)) {
+    return frame.timestamp;
+  }
+  if (typeof frame.timestamp === "string") {
+    const parsedEpoch = Date.parse(frame.timestamp);
+    if (Number.isFinite(parsedEpoch)) return parsedEpoch / 1000;
+    const numeric = Number(frame.timestamp);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return fallbackIndex / 100;
+}
+
+function estimateSampleRate(timestampsSeconds: number[]): number {
+  if (timestampsSeconds.length < 3) return 100;
+  const intervals: number[] = [];
+  for (let i = 1; i < timestampsSeconds.length; i++) {
+    const dt = timestampsSeconds[i] - timestampsSeconds[i - 1];
+    if (dt > 0) intervals.push(dt);
+  }
+  if (intervals.length === 0) return 100;
+  intervals.sort((a, b) => a - b);
+  const median = intervals[Math.floor(intervals.length / 2)];
+  return Math.max(1, 1 / Math.max(median, 1e-4));
+}
+
+function buildSubcarrierProfile(amplitudeMatrix: number[][], numSubcarriers: number): number[] {
+  const profile = new Array(numSubcarriers).fill(0);
+  for (const row of amplitudeMatrix) {
+    for (let i = 0; i < numSubcarriers; i++) {
+      profile[i] += row[i];
+    }
+  }
+  for (let i = 0; i < numSubcarriers; i++) {
+    profile[i] /= Math.max(amplitudeMatrix.length, 1);
+  }
+  return profile;
+}
+
+function fuseMultiNodeFrames(
+  normalizedFrames: NormalizedJsonlFrame[],
+  numSubcarriers: number
+): {
+  amplitudeMatrix: number[][];
+  rssiTimeseries: number[];
+  timestampsSeconds: number[];
+  fusion: ParsedFusionMeta;
+} {
+  const byNode = new Map<number, NormalizedJsonlFrame[]>();
+  for (const entry of normalizedFrames) {
+    const list = byNode.get(entry.frame.node_id) ?? [];
+    list.push(entry);
+    byNode.set(entry.frame.node_id, list);
+  }
+  for (const list of byNode.values()) {
+    list.sort((a, b) => a.tsSeconds - b.tsSeconds);
+  }
+
+  const nodeEntries = [...byNode.entries()].sort((a, b) => a[0] - b[0]);
+  const maxFrames = Math.max(...nodeEntries.map(([, frames]) => frames.length));
+  const minStart = Math.min(...nodeEntries.map(([, frames]) => frames[0].tsSeconds));
+  const maxEnd = Math.max(...nodeEntries.map(([, frames]) => frames[frames.length - 1].tsSeconds));
+  const sampleRateHz = estimateSampleRate(normalizedFrames.map((entry) => entry.tsSeconds));
+  const duration = Math.max(maxEnd - minStart, 0.01);
+  const timelineLength = Math.max(8, Math.round(duration * sampleRateHz));
+
+  const nodeWeightsRaw = nodeEntries.map(([nodeId, frames]) => {
+    const meanRssi = mean(frames.map((entry) => entry.frame.rssi));
+    const rssiScore = clamp((meanRssi + 92) / 38, 0.12, 1);
+    const densityScore = clamp(frames.length / Math.max(maxFrames, 1), 0.2, 1);
+    const weight = rssiScore * (0.45 + densityScore * 0.55);
+    return {
+      nodeId,
+      frames,
+      meanRssi,
+      weightRaw: weight,
+    };
+  });
+  const totalWeightRaw = nodeWeightsRaw.reduce((sum, node) => sum + node.weightRaw, 0);
+  const nodeWeights = nodeWeightsRaw.map((node) => ({
+    ...node,
+    weight: node.weightRaw / Math.max(totalWeightRaw, 1e-6),
+  }));
+
+  const pointers = new Map<number, number>();
+  for (const { nodeId } of nodeWeights) pointers.set(nodeId, 0);
+
+  const amplitudeMatrix: number[][] = [];
+  const rssiTimeseries: number[] = [];
+  const timestampsSeconds: number[] = [];
+  const toleranceSeconds = Math.max(1 / sampleRateHz, 0.015) * 2.4;
+
+  for (let i = 0; i < timelineLength; i++) {
+    const t = minStart + (i / Math.max(timelineLength - 1, 1)) * duration;
+    const fused = new Array(numSubcarriers).fill(0);
+    let fusedRssi = 0;
+    let usedWeight = 0;
+
+    for (const node of nodeWeights) {
+      const nodeId = node.nodeId;
+      const frames = node.frames;
+      let pointer = pointers.get(nodeId) ?? 0;
+      while (pointer + 1 < frames.length && frames[pointer + 1].tsSeconds <= t) pointer++;
+      pointers.set(nodeId, pointer);
+
+      const candidates = [frames[pointer], frames[Math.min(pointer + 1, frames.length - 1)]].filter(
+        Boolean
+      ) as NormalizedJsonlFrame[];
+      if (candidates.length === 0) continue;
+      const nearest = candidates.reduce((best, candidate) =>
+        Math.abs(candidate.tsSeconds - t) < Math.abs(best.tsSeconds - t) ? candidate : best
+      );
+      const age = Math.abs(nearest.tsSeconds - t);
+      if (age > toleranceSeconds) continue;
+
+      const temporalWeight = node.weight * clamp(1 - age / toleranceSeconds, 0.18, 1);
+      for (let s = 0; s < numSubcarriers; s++) {
+        fused[s] += nearest.amplitudes[s] * temporalWeight;
+      }
+      fusedRssi += nearest.frame.rssi * temporalWeight;
+      usedWeight += temporalWeight;
+    }
+
+    if (usedWeight <= 0.00001) continue;
+    amplitudeMatrix.push(fused.map((value) => value / usedWeight));
+    rssiTimeseries.push(fusedRssi / usedWeight);
+    timestampsSeconds.push(t - minStart);
+  }
+
+  return {
+    amplitudeMatrix,
+    rssiTimeseries,
+    timestampsSeconds,
+    fusion: {
+      enabled: true,
+      strategy: "weighted_time_aligned",
+      nodeCount: nodeWeights.length,
+      nodes: nodeWeights.map((node) => ({
+        nodeId: node.nodeId,
+        frameCount: node.frames.length,
+        meanRssi: Number(node.meanRssi.toFixed(2)),
+        weight: Number(node.weight.toFixed(4)),
+      })),
+    },
+  };
+}
+
 /**
  * Parse raw CSI file text into a uniform representation used by DSP and temporal models.
  */
@@ -160,14 +332,18 @@ export function parseCsiFile(text: string): ParsedCSI {
     if (frames.length === 0) throw new Error("No valid JSONL frames found");
 
     const normalizedFrames = frames
-      .map((frame) => {
+      .map((frame, index) => {
         const amplitudes =
           Array.isArray(frame.amplitudes) && frame.amplitudes.length > 0
             ? frame.amplitudes
             : typeof frame.iq_hex === "string"
             ? decodeIqHexToAmplitudes(frame.iq_hex)
             : [];
-        return { frame, amplitudes };
+        return {
+          frame,
+          amplitudes,
+          tsSeconds: frameTimestampSeconds(frame, index),
+        } satisfies NormalizedJsonlFrame;
       })
       .filter((entry) => entry.amplitudes.length > 0);
 
@@ -182,45 +358,57 @@ export function parseCsiFile(text: string): ParsedCSI {
       throw new Error("No usable CSI frames with valid amplitude payload");
     }
 
-    const amplitudeMatrix = usableFrames.map((entry) => entry.amplitudes.slice(0, numSubcarriers));
-    const amplitudeTimeseries = amplitudeMatrix.map((row) => mean(row));
-
-    const subcarrierProfile = new Array(numSubcarriers).fill(0);
-    amplitudeMatrix.forEach((row) => {
-      row.forEach((value, i) => {
-        subcarrierProfile[i] += value;
-      });
-    });
-    for (let i = 0; i < subcarrierProfile.length; i++) {
-      subcarrierProfile[i] /= amplitudeMatrix.length;
-    }
-
-    const rssiTimeseries = usableFrames.map((entry) => entry.frame.rssi);
     const nodeIds = [...new Set(usableFrames.map((entry) => entry.frame.node_id))];
 
-    const tsAbs = usableFrames.map((entry, index) => {
-      const f = entry.frame;
-      if (typeof f.ts_ns === "number" && Number.isFinite(f.ts_ns)) {
-        return f.ts_ns / 1e9;
-      }
-      if (typeof f.timestamp === "number" && Number.isFinite(f.timestamp)) {
-        return f.timestamp;
-      }
-      if (typeof f.timestamp === "string") {
-        const parsedEpoch = Date.parse(f.timestamp);
-        if (Number.isFinite(parsedEpoch)) return parsedEpoch / 1000;
-        const numeric = Number(f.timestamp);
-        if (Number.isFinite(numeric)) return numeric;
-      }
-      return index / 100;
-    });
-    const t0 = tsAbs[0];
-    const timestampsSeconds = tsAbs.map((t) => t - t0);
+    let amplitudeMatrix: number[][];
+    let rssiTimeseries: number[];
+    let timestampsSeconds: number[];
+    let fusion: ParsedFusionMeta | undefined;
+
+    if (nodeIds.length > 1) {
+      const fused = fuseMultiNodeFrames(
+        usableFrames.map((entry) => ({
+          ...entry,
+          amplitudes: entry.amplitudes.slice(0, numSubcarriers),
+        })),
+        numSubcarriers
+      );
+      amplitudeMatrix = fused.amplitudeMatrix;
+      rssiTimeseries = fused.rssiTimeseries;
+      timestampsSeconds = fused.timestampsSeconds;
+      fusion = fused.fusion;
+    } else {
+      amplitudeMatrix = usableFrames.map((entry) => entry.amplitudes.slice(0, numSubcarriers));
+      rssiTimeseries = usableFrames.map((entry) => entry.frame.rssi);
+      const tsAbs = usableFrames.map((entry) => entry.tsSeconds);
+      const t0 = tsAbs[0];
+      timestampsSeconds = tsAbs.map((t) => t - t0);
+      fusion = {
+        enabled: false,
+        strategy: "none",
+        nodeCount: 1,
+        nodes: [
+          {
+            nodeId: nodeIds[0],
+            frameCount: usableFrames.length,
+            meanRssi: Number(mean(rssiTimeseries).toFixed(2)),
+            weight: 1,
+          },
+        ],
+      };
+    }
+
+    if (amplitudeMatrix.length === 0) {
+      throw new Error("Unable to fuse CSI frames into a usable sequence.");
+    }
+
+    const amplitudeTimeseries = amplitudeMatrix.map((row) => mean(row));
+    const subcarrierProfile = buildSubcarrierProfile(amplitudeMatrix, numSubcarriers);
     const durationSeconds =
       timestampsSeconds.length > 1
         ? timestampsSeconds[timestampsSeconds.length - 1]
-        : usableFrames.length / 100;
-    const sampleRateHz = usableFrames.length / Math.max(durationSeconds, 0.001);
+        : amplitudeMatrix.length / 100;
+    const sampleRateHz = amplitudeMatrix.length / Math.max(durationSeconds, 0.001);
     const scenarioHints = [
       ...new Set(
         usableFrames
@@ -233,7 +421,7 @@ export function parseCsiFile(text: string): ParsedCSI {
       format,
       sampleRateHz,
       durationSeconds,
-      numFrames: usableFrames.length,
+      numFrames: amplitudeMatrix.length,
       numSubcarriers,
       numAntennas: 1,
       nodeIds,
@@ -244,6 +432,7 @@ export function parseCsiFile(text: string): ParsedCSI {
       phaseMatrix: null,
       subcarrierProfile,
       rssiTimeseries,
+      fusion,
     };
   }
 
@@ -311,6 +500,19 @@ export function parseCsiFile(text: string): ParsedCSI {
       phaseMatrix,
       subcarrierProfile,
       rssiTimeseries: frames.map(() => -65),
+      fusion: {
+        enabled: false,
+        strategy: "none",
+        nodeCount: 1,
+        nodes: [
+          {
+            nodeId: 0,
+            frameCount: frames.length,
+            meanRssi: -65,
+            weight: 1,
+          },
+        ],
+      },
     };
   }
 

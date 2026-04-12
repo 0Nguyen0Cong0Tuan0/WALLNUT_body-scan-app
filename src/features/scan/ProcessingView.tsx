@@ -2,16 +2,37 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import { ScanState } from "./types";
+import { AnalysisModelId, ScanState } from "./types";
 
 const SignalVizPanelClient = dynamic(() => import("@/components/SignalVizPanel"), { ssr: false });
 const LivePoseFusionClient = dynamic(() => import("@/components/LivePoseFusion"), { ssr: false });
 
-export function ProcessingView({ state, progress, mode }: { state: ScanState; progress?: number | null; mode?: "upload" | "live" | "simulate" | null }) {
-  const steps = [
-    { id: "processing", label: "DSP Filter & Vital Extraction" },
-    { id: "analyzing",  label: "Qwen AI Clinical Analysis" },
-  ];
+function resolveAnalysisLabel(model: AnalysisModelId): string {
+  if (model === "qwen-plus") return "Qwen Plus Clinical Analysis";
+  if (model === "qwen-turbo") return "Qwen Turbo Clinical Analysis";
+  if (model === "qwen-max") return "Qwen Max Clinical Analysis";
+  return "Rule Engine Clinical Summary";
+}
+
+export function ProcessingView({
+  state,
+  progress,
+  mode,
+  analysisModel,
+}: {
+  state: ScanState;
+  progress?: number | null;
+  mode?: "upload" | "live" | "simulate" | null;
+  analysisModel?: AnalysisModelId;
+}) {
+  const selectedModel = analysisModel ?? "none";
+  const modelAnalysisEnabled = selectedModel !== "none";
+  const steps = modelAnalysisEnabled
+    ? [
+        { id: "processing", label: "DSP Filter & Vital Extraction" },
+        { id: "analyzing", label: resolveAnalysisLabel(selectedModel) },
+      ]
+    : [{ id: "processing", label: "DSP Filter, Vital Extraction & Rule Summary" }];
   return (
     <div className="flex flex-col gap-8 py-8 w-full max-w-7xl mx-auto">
       {/* Visual Telemetry (Observatory embedded here) */}
@@ -54,8 +75,10 @@ export function ProcessingView({ state, progress, mode }: { state: ScanState; pr
 
         <div className="w-full max-w-sm space-y-3">
           {steps.map((s, i) => {
-            const done = (state === "analyzing" && i === 0) || false;
-            const active = (state === "processing" && i === 0) || (state === "analyzing" && i === 1);
+            const done = modelAnalysisEnabled ? state === "analyzing" && i === 0 : false;
+            const active = modelAnalysisEnabled
+              ? (state === "processing" && i === 0) || (state === "analyzing" && i === 1)
+              : (state === "processing" || state === "analyzing") && i === 0;
             return (
               <div key={s.id} className="flex items-center gap-3">
                 <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${

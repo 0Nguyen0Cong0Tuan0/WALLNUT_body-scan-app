@@ -1,5 +1,14 @@
 import { analyzeTemporalPose, estimatePoseFromCSI, extractVitals, type ParsedCSI, type PoseKeypoint } from "@/lib/csiProcessor";
-import { InferenceEngineError, MalformedCsiFrameError } from "@/lib/scanErrors";
+import {
+  InferenceEngineError,
+  MalformedCsiFrameError,
+  ScanServiceError,
+  SignalQualityError,
+} from "@/lib/scanErrors";
+import {
+  normalizeAnalysisModelId,
+  runAnalysisModel,
+} from "@/lib/analysisModels";
 
 export interface ComputedBodyMetrics {
   estimatedHeightCm: number;
@@ -61,10 +70,68 @@ export interface InferenceAnalysis {
   source: "qwen" | "rule-based";
 }
 
+export interface ScanQualityComponents {
+  frameCoverage: number;
+  sampleRate: number;
+  rssiStrength: number;
+  temporalStability: number;
+  motionConsistency: number;
+  nodeCoverage: number;
+}
+
+export interface InterferenceDiagnostics {
+  score: number;
+  primaryPeakPower: number;
+  secondaryPeakPower: number;
+  spectralAmbiguity: number;
+  multiPersonLikely: boolean;
+}
+
+export interface ScanDiagnostics {
+  qualityScore: number;
+  qualityGrade: "A" | "B" | "C" | "D";
+  qualityGatePassed: boolean;
+  qualityComponents: ScanQualityComponents;
+  interferenceScore: number;
+  multiPersonLikely: boolean;
+  warnings: string[];
+  fusion?: ParsedCSI["fusion"];
+  calibration: {
+    profileId?: string;
+    baselineApplied: boolean;
+    driftCompensationStrength: number;
+  };
+}
+
+export interface CalibrationAdjustments {
+  profileId?: string;
+  heartRateBiasBpm: number;
+  breathingRateBiasBpm: number;
+  hrvBiasMs: number;
+  shoulderScale: number;
+  hipScale: number;
+  torsoScale: number;
+  leftArmScale: number;
+  rightArmScale: number;
+  leftLegScale: number;
+  bodyFatBiasPercent: number;
+  waistBiasCm: number;
+}
+
+export interface InferenceOptions {
+  calibration?: CalibrationAdjustments;
+  qualityGateMin?: number;
+  baselineApplied?: boolean;
+  driftCompensationStrength?: number;
+  analysisModel?: string | null;
+  ragContext?: string | null;
+}
+
 export interface InferenceResult {
   frame: InferenceFrame;
   analysis: InferenceAnalysis;
   inputSource: string;
+  diagnostics: ScanDiagnostics;
 }
 
 function toErrorMessage(error: unknown): string {
@@ -74,6 +141,206 @@ function toErrorMessage(error: unknown): string {
 
 function clamp(value: number, minValue: number, maxValue: number): number {
   return Math.min(maxValue, Math.max(minValue, value));
+}
+
+function round(value: number, digits = 3): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function mean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function resolveQualityGateMin(override?: number): number {
+  if (typeof override === "number" && Number.isFinite(override)) {
+    return clamp(override, 0.1, 0.95);
+  }
+  const envValue = Number(process.env.SCAN_QUALITY_GATE_MIN);
+  if (Number.isFinite(envValue)) return clamp(envValue, 0.1, 0.95);
+  return 0.38;
+}
+
+function classifyBodyFat(bodyFatPercent: number): { classification: string; color: string } {
+  if (bodyFatPercent < 10) return { classification: "Underfat", color: "amber" };
+  if (bodyFatPercent < 25) return { classification: "Healthy", color: "emerald" };
+  if (bodyFatPercent < 32) return { classification: "Overfat", color: "orange" };
+  return { classification: "Obese", color: "rose" };
+}
+
+function applyCalibrationToVitals(
+  vitals: { heartRateBpm: number; breathingRateBpm: number; hrv: number },
+  calibration?: CalibrationAdjustments
+): { heartRateBpm: number; breathingRateBpm: number; hrv: number } {
+  if (!calibration) return vitals;
+  return {
+    heartRateBpm: Math.round(clamp(vitals.heartRateBpm + calibration.heartRateBiasBpm, 40, 140)),
+    breathingRateBpm: Math.round(clamp(vitals.breathingRateBpm + calibration.breathingRateBiasBpm, 6, 36)),
+    hrv: Math.round(clamp(vitals.hrv + calibration.hrvBiasMs, 8, 160)),
+  };
+}
+
+function applyCalibrationToBodyMetrics(
+  metrics: ComputedBodyMetrics,
+  calibration?: CalibrationAdjustments
+): ComputedBodyMetrics {
+  if (!calibration) return metrics;
+  return stabilizeBodyMetrics({
+    ...metrics,
+    shoulderWidthCm: Math.round(metrics.shoulderWidthCm * calibration.shoulderScale),
+    hipWidthCm: Math.round(metrics.hipWidthCm * calibration.hipScale),
+    torsoLengthCm: Math.round(metrics.torsoLengthCm * calibration.torsoScale),
+    leftArmLengthCm: Math.round(metrics.leftArmLengthCm * calibration.leftArmScale),
+    rightArmLengthCm: Math.round(metrics.rightArmLengthCm * calibration.rightArmScale),
+    leftLegLengthCm: Math.round(metrics.leftLegLengthCm * calibration.leftLegScale),
+  });
+}
+
+function applyCalibrationToAnalysis(
+  analysis: InferenceAnalysis,
+  calibration?: CalibrationAdjustments
+): InferenceAnalysis {
+  if (!calibration) return analysis;
+  const adjustedBodyFat = round(clamp(analysis.bodyFatPercent + calibration.bodyFatBiasPercent, 5, 45), 1);
+  const adjustedWaist = Math.round(clamp(analysis.estimatedWaistCm + calibration.waistBiasCm, 40, 180));
+  const classification = classifyBodyFat(adjustedBodyFat);
+  const summarySuffix =
+    calibration.bodyFatBiasPercent !== 0 || calibration.waistBiasCm !== 0
+      ? ` Calibration-adjusted estimate: body fat ${adjustedBodyFat}% and waist ${adjustedWaist} cm.`
+      : "";
+  return {
+    ...analysis,
+    bodyFatPercent: adjustedBodyFat,
+    estimatedWaistCm: adjustedWaist,
+    bodyFatClassification: classification.classification,
+    classColor: classification.color,
+    clinicalSummary: `${analysis.clinicalSummary}${summarySuffix}`.trim(),
+  };
+}
+
+function computeSpectralPeaks(signal: number[], sampleRateHz: number): {
+  primaryPower: number;
+  secondaryPower: number;
+} {
+  if (signal.length < 24 || sampleRateHz <= 0) {
+    return { primaryPower: 0, secondaryPower: 0 };
+  }
+  const centered = signal.map((value) => value - mean(signal));
+  const n = centered.length;
+  const minHz = 0.08;
+  const maxHz = Math.min(2.5, sampleRateHz / 2 - 0.01);
+  const startBin = Math.max(1, Math.floor((minHz * n) / sampleRateHz));
+  const endBin = Math.max(startBin + 1, Math.floor((maxHz * n) / sampleRateHz));
+
+  let primaryPower = 0;
+  let secondaryPower = 0;
+  for (let k = startBin; k <= endBin; k++) {
+    let re = 0;
+    let im = 0;
+    for (let t = 0; t < n; t++) {
+      const phi = (2 * Math.PI * k * t) / n;
+      re += centered[t] * Math.cos(phi);
+      im -= centered[t] * Math.sin(phi);
+    }
+    const power = re * re + im * im;
+    if (power >= primaryPower) {
+      secondaryPower = primaryPower;
+      primaryPower = power;
+    } else if (power > secondaryPower) {
+      secondaryPower = power;
+    }
+  }
+
+  return { primaryPower, secondaryPower };
+}
+
+function computeInterferenceDiagnostics(
+  parsedCsi: ParsedCSI,
+  temporalPose: ReturnType<typeof analyzeTemporalPose>
+): InterferenceDiagnostics {
+  const peaks = computeSpectralPeaks(parsedCsi.amplitudeTimeseries, parsedCsi.sampleRateHz);
+  const spectralAmbiguity =
+    peaks.primaryPower <= 0 ? 0 : clamp(peaks.secondaryPower / peaks.primaryPower, 0, 1);
+  const phaseDisorder = clamp((0.62 - temporalPose.phaseStability) / 0.62, 0, 1);
+  const energyPressure = clamp((temporalPose.motionEnergy - 0.08) / 0.14, 0, 1);
+  const score = clamp(spectralAmbiguity * 0.52 + phaseDisorder * 0.30 + energyPressure * 0.18, 0, 1);
+  const multiPersonLikely = score >= 0.72 && spectralAmbiguity >= 0.58;
+  return {
+    score: round(score, 4),
+    primaryPeakPower: round(peaks.primaryPower, 4),
+    secondaryPeakPower: round(peaks.secondaryPower, 4),
+    spectralAmbiguity: round(spectralAmbiguity, 4),
+    multiPersonLikely,
+  };
+}
+
+function computeScanDiagnostics(
+  parsedCsi: ParsedCSI,
+  temporalPose: ReturnType<typeof analyzeTemporalPose>,
+  interference: InterferenceDiagnostics,
+  options?: InferenceOptions
+): ScanDiagnostics {
+  const meanRssi = mean(parsedCsi.rssiTimeseries);
+  const components: ScanQualityComponents = {
+    frameCoverage: round(clamp(parsedCsi.numFrames / 260, 0, 1), 4),
+    sampleRate: round(clamp(parsedCsi.sampleRateHz / 95, 0, 1), 4),
+    rssiStrength: round(clamp((meanRssi + 92) / 38, 0, 1), 4),
+    temporalStability: round(clamp(temporalPose.phaseStability, 0, 1), 4),
+    motionConsistency: round(clamp(1 - Math.abs(temporalPose.motionEnergy - 0.06) / 0.16, 0, 1), 4),
+    nodeCoverage: round(
+      parsedCsi.fusion?.enabled
+        ? clamp((parsedCsi.fusion.nodeCount + 1) / 3, 0.45, 1)
+        : 0.86,
+      4
+    ),
+  };
+
+  const qualityScore = round(
+    clamp(
+      components.frameCoverage * 0.20 +
+        components.sampleRate * 0.15 +
+        components.rssiStrength * 0.20 +
+        components.temporalStability * 0.20 +
+        components.motionConsistency * 0.15 +
+        components.nodeCoverage * 0.10 -
+        interference.score * 0.18,
+      0,
+      1
+    ),
+    4
+  );
+
+  const qualityGrade: ScanDiagnostics["qualityGrade"] =
+    qualityScore >= 0.82 ? "A" : qualityScore >= 0.65 ? "B" : qualityScore >= 0.48 ? "C" : "D";
+
+  const warnings: string[] = [];
+  if (qualityScore < 0.55) warnings.push("Signal quality is low; scan confidence is reduced.");
+  if (components.rssiStrength < 0.42) warnings.push("Weak RF strength detected.");
+  if (components.temporalStability < 0.46) warnings.push("Temporal phase instability indicates interference.");
+  if (interference.multiPersonLikely) warnings.push("Possible multi-person or environmental interference detected.");
+  if (parsedCsi.fusion?.enabled) {
+    warnings.push(`Multi-node fusion active across ${parsedCsi.fusion.nodeCount} nodes.`);
+  }
+
+  const gateMin = resolveQualityGateMin(options?.qualityGateMin);
+  const gatePassed = qualityScore >= gateMin && !(interference.score > 0.93 && qualityScore < 0.62);
+
+  return {
+    qualityScore,
+    qualityGrade,
+    qualityGatePassed: gatePassed,
+    qualityComponents: components,
+    interferenceScore: interference.score,
+    multiPersonLikely: interference.multiPersonLikely,
+    warnings,
+    fusion: parsedCsi.fusion,
+    calibration: {
+      profileId: options?.calibration?.profileId,
+      baselineApplied: Boolean(options?.baselineApplied),
+      driftCompensationStrength: options?.driftCompensationStrength ?? 0,
+    },
+  };
 }
 
 function computeBodyMetrics(keypoints: { point: string; x: number; y: number }[], refHeightCm = 170): ComputedBodyMetrics {
@@ -128,15 +395,21 @@ function buildPrompt(
   avgConf: number,
   source: string
 ): string {
-  return `You are a medical body composition AI assistant integrated into the Elfie healthcare platform. You have received the following data from a privacy-first WiFi CSI body scan (source: ${source}).
+  return `You are the clinical interpretation assistant for a privacy-first WiFi CSI body scan.
+You must only use the provided metrics. Do not invent extra measurements and do not diagnose diseases.
+Keep recommendations practical, cautious, and non-prescriptive.
 
-## Sensor Vitals
+Scan source: ${source}
+
+## Signal + confidence
+- Average keypoint confidence: ${avgConf.toFixed(2)}
+
+## Extracted vitals
 - Heart Rate: ${vitals.heartRateBpm} bpm
 - Breathing Rate: ${vitals.breathingRateBpm} breaths/min
 - HRV: ${vitals.hrv} ms
-- Average Keypoint Confidence: ${avgConf.toFixed(2)}
 
-## Body Measurements (from CSI spatial analysis)
+## Body metrics (CSI-derived geometry)
 - Estimated Height: ${bodyMetrics.estimatedHeightCm} cm
 - Shoulder Width: ${bodyMetrics.shoulderWidthCm} cm
 - Hip Width: ${bodyMetrics.hipWidthCm} cm
@@ -146,7 +419,14 @@ function buildPrompt(
 - Left Leg: ${bodyMetrics.leftLegLengthCm} cm
 - Shoulder-to-Hip Ratio: ${bodyMetrics.bmi_proxy}
 
-Respond ONLY with a valid JSON object using this exact schema:
+Output requirements:
+1. Return JSON only (no markdown or prose before/after).
+2. Keep "clinicalSummary" to 2-3 short sentences.
+3. "recommendations" must contain exactly 3 concise items.
+4. Keep values realistic for an adult wellness scan.
+5. bodyFatClassification must be one of: Underfat, Healthy, Overfat, Obese.
+
+Return this exact schema:
 {
   "bodyFatPercent": <number>,
   "bodyFatClassification": "<Underfat|Healthy|Overfat|Obese>",
@@ -157,29 +437,21 @@ Respond ONLY with a valid JSON object using this exact schema:
 }`;
 }
 
-async function callQwenAPI(prompt: string): Promise<Record<string, unknown> | null> {
-  const apiKey = process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) return null;
-
-  const response = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "qwen-plus",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-    }),
-  });
-
-  if (!response.ok) return null;
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) return null;
-  return JSON.parse(content) as Record<string, unknown>;
+function normalizeRecommendations(items: unknown, fallbackBodyFat: number): string[] {
+  const defaults = [
+    fallbackBodyFat > 25
+      ? "Increase moderate activity and maintain a consistent sleep schedule."
+      : "Maintain your current wellness routine and continue periodic tracking.",
+    "Use weekly trend tracking to compare HR, breathing rate, and HRV together.",
+    "Seek clinician guidance if persistent abnormal trends appear across multiple scans.",
+  ];
+  if (!Array.isArray(items)) return defaults;
+  const cleaned = items
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 3);
+  while (cleaned.length < 3) cleaned.push(defaults[cleaned.length]);
+  return cleaned;
 }
 
 function ruleBasedAnalysis(
@@ -196,31 +468,16 @@ function ruleBasedAnalysis(
   if (heartRateBpm > 85) fatBase += 2.5;
   if (hrv < 30) fatBase += 1.5;
   const bodyFatPercent = Math.max(5, Math.min(45, parseFloat(fatBase.toFixed(1))));
-
-  let bodyFatClassification: string;
-  let classColor: string;
-  if (bodyFatPercent < 10) {
-    bodyFatClassification = "Underfat";
-    classColor = "amber";
-  } else if (bodyFatPercent < 25) {
-    bodyFatClassification = "Healthy";
-    classColor = "emerald";
-  } else if (bodyFatPercent < 32) {
-    bodyFatClassification = "Overfat";
-    classColor = "orange";
-  } else {
-    bodyFatClassification = "Obese";
-    classColor = "rose";
-  }
+  const bodyFatClass = classifyBodyFat(bodyFatPercent);
 
   const estimatedWaistCm = Math.round(hipWidthCm * 1.6 + (bodyFatPercent - 15) * 0.5);
 
   return {
     bodyFatPercent,
-    bodyFatClassification,
-    classColor,
+    bodyFatClassification: bodyFatClass.classification,
+    classColor: bodyFatClass.color,
     estimatedWaistCm,
-    clinicalSummary: `Based on CSI skeletal analysis, estimated body fat is ${bodyFatPercent}% (${bodyFatClassification}). Heart rate of ${heartRateBpm} bpm and breathing rate of ${breathingRateBpm} rpm are ${heartRateBpm > 90 ? "slightly elevated" : "within normal range"}. HRV of ${hrv} ms suggests ${hrv > 40 ? "good" : "moderate"} autonomic regulation.`,
+    clinicalSummary: `Based on CSI skeletal analysis, estimated body fat is ${bodyFatPercent}% (${bodyFatClass.classification}). Heart rate of ${heartRateBpm} bpm and breathing rate of ${breathingRateBpm} rpm are ${heartRateBpm > 90 ? "slightly elevated" : "within normal range"}. HRV of ${hrv} ms suggests ${hrv > 40 ? "good" : "moderate"} autonomic regulation.`,
     recommendations: [
       bodyFatPercent > 25
         ? "Incorporate 30 min moderate aerobic exercise 4–5 days per week."
@@ -238,7 +495,11 @@ function ruleBasedAnalysis(
   };
 }
 
-export async function runInferenceEngine(parsedCsi: ParsedCSI, inputSource: string): Promise<InferenceResult> {
+export async function runInferenceEngine(
+  parsedCsi: ParsedCSI,
+  inputSource: string,
+  options?: InferenceOptions
+): Promise<InferenceResult> {
   if (parsedCsi.numFrames < 4 || parsedCsi.numSubcarriers < 8) {
     throw new MalformedCsiFrameError("CSI payload is too short for inference.", {
       numFrames: parsedCsi.numFrames,
@@ -263,51 +524,82 @@ export async function runInferenceEngine(parsedCsi: ParsedCSI, inputSource: stri
   const keypointSequence = temporalPose.sequence;
   const representativeFrame = keypointSequence[Math.floor(keypointSequence.length / 2)];
   const keypoints = representativeFrame?.keypoints ?? poseData.keypoints;
-  const bodyMetrics = stabilizeBodyMetrics(computeBodyMetrics(keypoints));
+  const rawBodyMetrics = stabilizeBodyMetrics(computeBodyMetrics(keypoints));
 
-  const vitals = {
+  const rawVitals = {
     heartRateBpm: extractedVitals.heartRateBpm,
     breathingRateBpm: extractedVitals.breathingRateBpm,
     hrv: extractedVitals.hrv,
   };
+  const vitals = applyCalibrationToVitals(rawVitals, options?.calibration);
+  const bodyMetrics = applyCalibrationToBodyMetrics(rawBodyMetrics, options?.calibration);
+
+  const interference = computeInterferenceDiagnostics(parsedCsi, temporalPose);
+  const diagnostics = computeScanDiagnostics(parsedCsi, temporalPose, interference, options);
+  if (!diagnostics.qualityGatePassed) {
+    throw new SignalQualityError("Signal quality is too low for reliable inference.", {
+      qualityScore: diagnostics.qualityScore,
+      qualityGrade: diagnostics.qualityGrade,
+      qualityGateMin: resolveQualityGateMin(options?.qualityGateMin),
+      interferenceScore: diagnostics.interferenceScore,
+      warnings: diagnostics.warnings,
+    });
+  }
 
   const avgConf = keypoints.reduce((sum, keypoint) => sum + keypoint.confidence, 0) / keypoints.length;
   const prompt = buildPrompt(vitals, bodyMetrics, avgConf, inputSource);
 
   let analysis: InferenceAnalysis;
-  try {
-    const qwenResult = await callQwenAPI(prompt);
-    if (qwenResult) {
-      const classMap: Record<string, string> = {
-        Underfat: "amber",
-        Healthy: "emerald",
-        Overfat: "orange",
-        Obese: "rose",
-      };
-      analysis = {
-        bodyFatPercent: Number(qwenResult.bodyFatPercent),
-        bodyFatClassification: String(qwenResult.bodyFatClassification ?? "Healthy"),
-        classColor: classMap[String(qwenResult.bodyFatClassification)] ?? "slate",
-        estimatedWaistCm: Number(qwenResult.estimatedWaistCm),
-        clinicalSummary: String(qwenResult.clinicalSummary ?? ""),
-        recommendations: Array.isArray(qwenResult.recommendations)
-          ? qwenResult.recommendations.map((item) => String(item))
-          : [],
-        postureNotes: String(qwenResult.postureNotes ?? ""),
-        source: "qwen",
-      };
-    } else {
-      analysis = ruleBasedAnalysis(vitals, bodyMetrics);
-    }
-  } catch (error) {
-    // Explicit boundary around external model calls and downstream parsing.
+  const selectedModel = normalizeAnalysisModelId(options?.analysisModel);
+  if (selectedModel === "none") {
     analysis = ruleBasedAnalysis(vitals, bodyMetrics);
-    if (!analysis) {
-      throw new InferenceEngineError("Failed to generate scan analysis.", {
+  } else {
+    try {
+      const modelResult = await runAnalysisModel(selectedModel, {
+        prompt,
+        ragContext: options?.ragContext,
+      });
+      if (!modelResult) {
+        analysis = ruleBasedAnalysis(vitals, bodyMetrics);
+      } else {
+        const qwenResult = modelResult.content;
+        const classMap: Record<string, string> = {
+          Underfat: "amber",
+          Healthy: "emerald",
+          Overfat: "orange",
+          Obese: "rose",
+        };
+        const rawBodyFat = Number(qwenResult.bodyFatPercent);
+        const safeBodyFat = clamp(Number.isFinite(rawBodyFat) ? rawBodyFat : 22, 5, 45);
+        const safeClass = classifyBodyFat(safeBodyFat);
+        const rawWaist = Number(qwenResult.estimatedWaistCm);
+        const summary = String(qwenResult.clinicalSummary ?? "").trim();
+        analysis = {
+          bodyFatPercent: safeBodyFat,
+          bodyFatClassification: String(qwenResult.bodyFatClassification ?? safeClass.classification),
+          classColor: classMap[String(qwenResult.bodyFatClassification)] ?? safeClass.color,
+          estimatedWaistCm: Math.round(Number.isFinite(rawWaist) ? rawWaist : bodyMetrics.hipWidthCm * 1.6),
+          clinicalSummary:
+            summary.length > 0
+              ? summary
+              : `Estimated body fat is ${safeBodyFat}% (${safeClass.classification}) with vitals interpreted from CSI wellness metrics.`,
+          recommendations: normalizeRecommendations(qwenResult.recommendations, safeBodyFat),
+          postureNotes:
+            String(qwenResult.postureNotes ?? "").trim() ||
+            "Maintain neutral posture during repeated scans for stable trend quality.",
+          source: "qwen",
+        };
+      }
+    } catch (error) {
+      if (error instanceof ScanServiceError) throw error;
+      throw new InferenceEngineError("Selected AI analysis model failed.", {
+        selectedModel,
         reason: toErrorMessage(error),
+        causeName: error instanceof Error ? error.name : undefined,
       });
     }
   }
+  analysis = applyCalibrationToAnalysis(analysis, options?.calibration);
 
   const frame: InferenceFrame = {
     timestamp: Date.now(),
@@ -348,6 +640,7 @@ export async function runInferenceEngine(parsedCsi: ParsedCSI, inputSource: stri
     frame,
     analysis,
     inputSource,
+    diagnostics,
   };
 }
 
