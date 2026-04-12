@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WALLNUT Body Scan App
 
-## Getting Started
+Privacy-first body scan platform built on Next.js + TypeScript.  
+It processes WiFi CSI input (upload/live/simulated), extracts vitals and pose-derived biometrics, and renders a clinical-style report with optional Qwen-assisted narrative.
 
-First, run the development server:
+## Core capabilities
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Three scan modes**: file upload, live CSI UDP stream, or deterministic simulation.
+- **Signal pipeline**: CSI parsing → DSP vitals extraction → pose/temporal inference.
+- **Clinical output**: body-fat estimate, anthropometric circumferences, recommendations, and posture notes.
+- **History UX**: local browser-only scan history (export/clear/delete).
+- **Methodology pages**: technical whitepaper and workflow/research/privacy explainers.
+
+## Project structure
+
+```text
+src/
+  app/
+    page.tsx                      # main shell and page routing
+    history/page.tsx              # local scan history UI
+    methodology/page.tsx          # technical whitepaper
+    api/
+      _shared/scanResponses.ts    # shared API error/parse helpers
+      chat/route.ts               # chat proxy to external RAG service
+      scan/route.ts               # live + simulate scan endpoint
+      scan/upload/route.ts        # upload job creation
+      scan/upload/progress/route.ts
+      v1/status/route.ts          # live mesh status
+  features/
+    scan/
+      useScanController.ts        # scan orchestration hook
+      InputPanel.tsx
+      ProcessingView.tsx
+      ResultsPanel.tsx
+      FileDropZone.tsx
+      types.ts
+  lib/
+    csiProcessor.ts               # parsing + DSP + temporal analysis
+    inferenceEngine.ts            # Qwen/rule-based analysis layer
+    liveCsi.ts                    # UDP capture + mesh telemetry
+    uploadJobs.ts                 # in-memory async upload job orchestration
+    anthropometricModel.ts        # circumference estimation model
+    scanHistory.ts                # localStorage persistence
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Run locally
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open `http://localhost:3000`.
 
-## Learn More
+## Quality checks
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run lint
+npm run build
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Environment variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Variable | Purpose | Default |
+|---|---|---|
+| `RAG_SERVER_URL` | Upstream RAG/chat service base URL used by `/api/chat` | `http://localhost:8787` |
+| `QWEN_API_KEY` / `DASHSCOPE_API_KEY` | Qwen access key used by inference engine | unset |
+| `LIVE_CSI_UDP_PORT` | UDP port for live CSI capture | `8080` |
+| `LIVE_PRE_SCAN_TIMEOUT_MS` | packet probe timeout before live scan rejection | `45` |
+| `LIVE_CAPTURE_MAX_PACKETS` | max packets collected per live capture | `96` |
 
-## Deploy on Vercel
+## Extension points
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Add new scan sources by extending `ScanRequest` + `useScanController` and `src/app/api/scan/route.ts`.
+- Add new clinical metrics in `lib/csiProcessor.ts` / `lib/inferenceEngine.ts` and render in `ResultsPanel.tsx`.
+- Add new API response policies once in `app/api/_shared/scanResponses.ts` and reuse across routes.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+
+- Scan history is intentionally local-only (`localStorage`) unless you add a backend persistence layer.
+- Upload jobs are in-memory per runtime process; move to Redis/DB for multi-instance deployment.

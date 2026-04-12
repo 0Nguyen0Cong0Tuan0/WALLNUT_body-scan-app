@@ -51,7 +51,6 @@ function r1(v: number) { return Math.round(v * 10) / 10; }
 // ─── Main estimator ───────────────────────────────────────────────────────────
 export function estimateCircumferences(inputs: CSIBodyInputs): BodyCircumferences {
   const {
-    heightCm: H,
     shoulderWidthCm: sw,
     hipWidthCm: hw,
     bodyFatPercent: bf,
@@ -59,7 +58,6 @@ export function estimateCircumferences(inputs: CSIBodyInputs): BodyCircumference
   } = inputs;
 
   // Validate inputs
-  const safeH  = Math.max(140, Math.min(220, H));
   const safeSW = Math.max(30, Math.min(70, sw));
   const safeHW = Math.max(25, Math.min(65, hw));
   const safeBF = Math.max(3, Math.min(50, bf));

@@ -21,7 +21,7 @@
  *  ‣ Demo synthetic poses simulate CSI-derived skeleton sequences
  */
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export interface Keypoint {
@@ -265,29 +265,31 @@ export default function LivePoseFusion({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const smoothRef = useRef<Map<number, Keypoint[]>>(new Map());
-  const rafRef    = useRef(0);
   const tRef      = useRef(0);
   const [mode, setMode] = useState<RenderMode>(renderMode);
   const [activePose, setActivePose] = useState<PoseFrame | null>(null);
 
-  const draw = useCallback(() => {
-    tRef.current += 0.04;
-    const pose = frame ?? generateDemoPose(tRef.current);
-    setActivePose(pose);
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    renderFrame(ctx, width, height, pose, mode, smoothRef);
-
-    rafRef.current = requestAnimationFrame(draw);
-  }, [frame, mode, width, height]);
-
   useEffect(() => {
-    rafRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [draw]);
+    let animationFrameId = 0;
+    const drawFrame = () => {
+      tRef.current += 0.04;
+      const pose = frame ?? generateDemoPose(tRef.current);
+      setActivePose(pose);
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          renderFrame(ctx, width, height, pose, mode, smoothRef);
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(drawFrame);
+    };
+
+    animationFrameId = requestAnimationFrame(drawFrame);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [frame, mode, width, height]);
 
   const person = activePose?.persons[0];
 

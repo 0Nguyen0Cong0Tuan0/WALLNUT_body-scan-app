@@ -1,137 +1,42 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import TrustNavigation from "@/components/TrustNavigation";
 import HistoryPage from "@/app/history/page";
-import { addScanRecord } from "@/lib/scanHistory";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { InputPanel } from "@/features/scan/InputPanel";
 import { ProcessingView } from "@/features/scan/ProcessingView";
 import { ResultsPanel } from "@/features/scan/ResultsPanel";
-import { ScanState, ScanFrame, Analysis, CsiMeta, ScanRequest } from "@/features/scan/types";
+import { useScanController } from "@/features/scan/useScanController";
+
+type AppPage = "scan" | "vitals" | "history" | "workflow";
+const APP_PAGES: AppPage[] = ["scan", "vitals", "history", "workflow"];
 
 export default function Home() {
-  const [scanState, setScanState] = useState<ScanState>("idle");
-  const [frame, setFrame] = useState<ScanFrame | null>(null);
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [csiMeta, setCsiMeta] = useState<CsiMeta | undefined>(undefined);
-  const [inputSource, setInputSource] = useState("simulated");
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState("scan");
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [activeMode, setActiveMode] = useState<"upload" | "live" | "simulate" | null>(null);
+  const {
+    scanState,
+    frame,
+    analysis,
+    csiMeta,
+    inputSource,
+    errorMsg,
+    warningMsg,
+    uploadProgress,
+    activeMode,
+    runScan,
+    handleReset,
+  } = useScanController();
+  const [activePage, setActivePage] = useState<AppPage>("scan");
 
-  const runScan = useCallback(async (request: ScanRequest) => {
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    setErrorMsg(null);
-    setFrame(null);
-    setAnalysis(null);
-    setUploadProgress(null);
-    setActiveMode(request.mode);
-    setScanState(request.mode === "live" ? "connecting" : "processing");
-
-    try {
-      const applyResult = (data: { frame: ScanFrame; analysis: Analysis; inputSource: string }) => {
-        setFrame(data.frame);
-        setAnalysis(data.analysis);
-        setCsiMeta(data.frame.csiMeta);
-        setInputSource(data.inputSource);
-
-        try {
-          addScanRecord({
-            inputSource: data.inputSource as "simulate" | "upload" | "live",
-            vitals: {
-              heartRate: data.frame.vitals.heartRate,
-              breathingRate: data.frame.vitals.breathingRate,
-              hrv: data.frame.vitals.hrv,
-            },
-            bodyMetrics: {
-              estimatedHeightCm: data.frame.bodyMetrics.estimatedHeightCm,
-              shoulderWidthCm:   data.frame.bodyMetrics.shoulderWidthCm,
-              hipWidthCm:        data.frame.bodyMetrics.hipWidthCm,
-              torsoLengthCm:     data.frame.bodyMetrics.torsoLengthCm,
-              leftArmLengthCm:   data.frame.bodyMetrics.leftArmLengthCm,
-              leftLegLengthCm:   data.frame.bodyMetrics.leftLegLengthCm,
-            },
-            bodyFatPercent:        data.analysis.bodyFatPercent,
-            bodyFatClassification: data.analysis.bodyFatClassification,
-            estimatedWaistCm:      data.analysis.estimatedWaistCm,
-            activity:              data.frame.temporal?.activity ?? "unknown",
-            activityConfidence:    data.frame.temporal?.activityConfidence ?? 0,
-            dominantMotionHz:      data.frame.temporal?.dominantMotionHz ?? 0,
-            clinicalSummary:       data.analysis.clinicalSummary,
-            recommendations:       data.analysis.recommendations,
-            postureNotes:          data.analysis.postureNotes,
-            inferenceSource:       data.analysis.source,
-          });
-        } catch {
-          // Non-critical
-        }
-      };
-
-      if (request.mode === "upload") {
-        if (!request.file) throw new Error("Please choose a CSI file before starting upload mode.");
-
-        const form = new FormData();
-        form.append("csiFile", request.file);
-        const startResponse = await fetch("/api/scan/upload", { method: "POST", body: form });
-        const startData = await startResponse.json();
-        if (!startResponse.ok || !startData.success) throw new Error(startData.error ?? "Upload job failed to start.");
-
-        const jobId = String(startData.jobId);
-        for (let attempt = 0; attempt < 240; attempt++) {
-          const progressResponse = await fetch(`/api/scan/upload/progress?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
-          const progressData = await progressResponse.json();
-          if (!progressResponse.ok || !progressData.success) throw new Error(progressData.error ?? "Unable to read upload progress.");
-
-          const progressValue = Number(progressData.progress ?? 0);
-          setUploadProgress(Number.isFinite(progressValue) ? progressValue : null);
-
-          const stage = String(progressData.stage ?? "");
-          if (stage === "validating" || stage === "decoding_binary" || stage === "parsing") {
-            setScanState("processing");
-          } else if (stage === "inference") {
-            setScanState("analyzing");
-          }
-
-          if (stage === "completed" && progressData.result) {
-            applyResult(progressData.result as { frame: ScanFrame; analysis: Analysis; inputSource: string });
-            setScanState("results");
-            setUploadProgress(100);
-            return;
-          }
-
-          if (stage === "failed") throw new Error(progressData.error?.message ?? "Upload processing failed.");
-          await sleep(250);
-        }
-        throw new Error("Upload processing timed out.");
-      }
-
-      setScanState(request.mode === "live" ? "connecting" : "processing");
-      const response = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: request.mode, livePort: request.livePort }),
-      });
-
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error ?? "Scan failed.");
-
-      setScanState("analyzing");
-      applyResult(data as { frame: ScanFrame; analysis: Analysis; inputSource: string });
-      setScanState("results");
-    } catch (err) {
-      setErrorMsg(String(err));
-      setScanState("error");
-      setUploadProgress(null);
+  const handlePageSelect = (value: string) => {
+    if (APP_PAGES.includes(value as AppPage)) {
+      setActivePage(value as AppPage);
     }
-  }, []);
-
-  const handleReset = () => { setScanState("idle"); setFrame(null); setAnalysis(null); setErrorMsg(null); setUploadProgress(null); };
+  };
 
   return (
     <div className="flex min-h-screen h-dvh flex-col overflow-hidden lg:flex-row w-full" style={{ fontFamily: "var(--font-sans)" }}>
-      <Sidebar active={activePage} onSelect={setActivePage} />
+      <Sidebar active={activePage} onSelect={handlePageSelect} />
 
       {/* Main area spans full width */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden w-full">
@@ -147,6 +52,11 @@ export default function Home() {
 
               {/* Right panel — results / states */}
               <div className={`overflow-y-auto p-5 xl:p-8 min-w-0 w-full ${scanState === "processing" || scanState === "analyzing" || scanState === "connecting" ? "col-span-full max-w-[1600px] mx-auto" : ""}`}>
+                {warningMsg && (
+                  <div className="rounded-lg px-3 py-2.5 mb-4 text-xs" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", color: "#fbbf24" }}>
+                    {warningMsg}
+                  </div>
+                )}
                 {scanState === "idle" && (
                   <div className="flex flex-col items-center justify-center h-full min-h-[400px] gap-5">
                     <div className="text-cyan-500/20">

@@ -32,8 +32,6 @@ export interface InferenceFrame {
     motionScore: number;
   }[];
   temporal: {
-    activity: string;
-    activityConfidence: number;
     dominantMotionHz: number;
     breathingHz: number;
     motionEnergy: number;
@@ -225,8 +223,8 @@ function ruleBasedAnalysis(
     clinicalSummary: `Based on CSI skeletal analysis, estimated body fat is ${bodyFatPercent}% (${bodyFatClassification}). Heart rate of ${heartRateBpm} bpm and breathing rate of ${breathingRateBpm} rpm are ${heartRateBpm > 90 ? "slightly elevated" : "within normal range"}. HRV of ${hrv} ms suggests ${hrv > 40 ? "good" : "moderate"} autonomic regulation.`,
     recommendations: [
       bodyFatPercent > 25
-        ? "Incorporate 30 min moderate aerobic exercise (walking, cycling) 4–5 days per week."
-        : "Maintain current activity levels and log weekly scans in Elfie to track trends.",
+        ? "Incorporate 30 min moderate aerobic exercise 4–5 days per week."
+        : "Maintain a consistent wellness routine and log weekly scans in Elfie to track trends.",
       hrv < 35
         ? "Practice diaphragmatic breathing or mindfulness to improve HRV and parasympathetic tone."
         : "Your HRV is healthy. Track it weekly via Elfie to detect early stress or recovery issues.",
@@ -326,8 +324,6 @@ export async function runInferenceEngine(parsedCsi: ParsedCSI, inputSource: stri
     bodyMetrics,
     keypointSequence,
     temporal: {
-      activity: temporalPose.activity,
-      activityConfidence: temporalPose.activityConfidence,
       dominantMotionHz: temporalPose.dominantMotionHz,
       breathingHz: temporalPose.breathingHz,
       motionEnergy: temporalPose.motionEnergy,

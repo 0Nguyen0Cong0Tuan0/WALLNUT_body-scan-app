@@ -11,8 +11,6 @@ interface ScanMetrics {
   estimatedHeightCm: number;
   shoulderWidthCm: number;
   hipWidthCm: number;
-  activity: string;
-  activityConfidence: number;
   clinicalSummary?: string;
 }
 
@@ -35,7 +33,7 @@ function buildSuggestions(m: ScanMetrics): string[] {
   else q.push(`What does my HRV of ${m.hrv.toFixed(0)} ms indicate?`);
   if (m.bodyFatPercent > 28) q.push(`What are the risks of my ${m.bodyFatPercent.toFixed(1)}% body fat?`);
   else q.push(`Is ${m.bodyFatPercent.toFixed(1)}% body fat healthy for me?`);
-  q.push(`Why was I classified as "${m.activity}" and how accurate is that?`);
+  q.push("How should I interpret my heart rate and HRV together?");
   q.push("How does WiFi actually measure my heart rate through the air?");
   return q.slice(0, 4);
 }
@@ -113,7 +111,7 @@ function Bubble({ msg }: { msg: ChatMessage }) {
 export default function ChatWithAI({ scanMetrics }: Props) {
   const WELCOME: ChatMessage = {
     id: "welcome", role: "assistant", ragUsed: false,
-    text: `Hello! I'm analysing your WALLNUT scan:\n• Heart rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm  • HRV: ${scanMetrics.hrv.toFixed(0)} ms  • Body fat: ${scanMetrics.bodyFatPercent.toFixed(1)}% (${scanMetrics.bodyFatClassification})  • Activity: ${scanMetrics.activity}\n\nAsk me anything about your results or the WiFi sensing technology.`,
+    text: `Hello! I'm analysing your WALLNUT scan:\n• Heart rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm  • HRV: ${scanMetrics.hrv.toFixed(0)} ms  • Body fat: ${scanMetrics.bodyFatPercent.toFixed(1)}% (${scanMetrics.bodyFatClassification})\n\nAsk me anything about your results or the WiFi sensing technology.`,
   };
 
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);

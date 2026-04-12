@@ -2,29 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseCsiFile } from "@/lib/csiProcessor";
 import { runInferenceEngine } from "@/lib/inferenceEngine";
 import { assertLiveTraffic, resolveLiveMaxPackets, resolveLivePort, resolveLiveProbeTimeoutMs } from "@/lib/liveCsi";
-import { toScanServiceError, UnsupportedScanModeError, InvalidCsiFileError } from "@/lib/scanErrors";
+import { UnsupportedScanModeError, InvalidCsiFileError } from "@/lib/scanErrors";
 import { generateSimulatedParsedCsi } from "@/lib/simulatedCsi";
-import type { SimulatedActivity } from "@/lib/ruviewSimulator";
+import { buildScanErrorResponse } from "@/app/api/_shared/scanResponses";
 
 export const runtime = "nodejs";
 
 interface ScanRequestBody {
   mode?: "live" | "simulate" | "upload";
   livePort?: number;
-  simulatedActivity?: SimulatedActivity;
-}
-
-function buildErrorResponse(error: unknown) {
-  const scanError = toScanServiceError(error);
-  return NextResponse.json(
-    {
-      success: false,
-      error: scanError.message,
-      code: scanError.code,
-      details: scanError.details,
-    },
-    { status: scanError.status }
-  );
 }
 
 async function parseRequestBody(req: NextRequest): Promise<ScanRequestBody> {
@@ -77,8 +63,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (mode === "simulate") {
-      const { parsed, activity } = generateSimulatedParsedCsi(body.simulatedActivity);
-      const result = await runInferenceEngine(parsed, `simulated:${activity}`);
+      const parsed = generateSimulatedParsedCsi();
+      const result = await runInferenceEngine(parsed, "simulated");
       return NextResponse.json({
         success: true,
         ...result,
@@ -91,7 +77,7 @@ export async function POST(req: NextRequest) {
 
     throw new UnsupportedScanModeError(String(mode));
   } catch (error) {
-    return buildErrorResponse(error);
+    return buildScanErrorResponse(error);
   }
 }
 

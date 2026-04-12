@@ -36,7 +36,6 @@ interface PoseSequenceFrame {
 interface Props {
   keypoints?: PoseKeypoint[];
   keypointSequence?: PoseSequenceFrame[];
-  activity?: string;
   dominantMotionHz?: number;
   breathingHz?: number;
   minHeight?: number | string;
@@ -238,7 +237,6 @@ function HumanBody({
   measurements,
   spinning,
   poseKeypoints,
-  activity,
   breathingHz,
 }: {
   bodyMetrics: BodyMetrics;
@@ -246,7 +244,6 @@ function HumanBody({
   measurements: BodyCircumferences;
   spinning: boolean;
   poseKeypoints?: PoseKeypoint[];
-  activity?: string;
   breathingHz?: number;
 }) {
   type V3 = [number, number, number];
@@ -254,11 +251,9 @@ function HumanBody({
   const torsoRef = useRef<THREE.Group>(null!);
   useFrame(({ clock }, delta) => {
     if (spinning) groupRef.current.rotation.y += delta * 0.28;
-    const targetTilt = activity === "fallen" ? -Math.PI * 0.47 : 0;
-    groupRef.current.rotation.z += (targetTilt - groupRef.current.rotation.z) * 0.08;
     if (torsoRef.current) {
       const hz = breathingHz && breathingHz > 0 ? breathingHz : 0.25;
-      const amp = activity === "walking" ? 0.022 : 0.015;
+      const amp = 0.015;
       const pulse = 1 + Math.sin(clock.elapsedTime * 2 * Math.PI * hz) * amp;
       torsoRef.current.scale.set(1, pulse * 0.96, pulse);
     }
@@ -409,7 +404,7 @@ function HumanBody({
   };
 
   return (
-    <group ref={groupRef} position={[0, activity === "fallen" ? -0.07 : 0, 0]}>
+    <group ref={groupRef} position={[0, 0, 0]}>
       {/* ── Head ── */}
       <mesh position={headPos} castShadow>
         <sphereGeometry args={[HEAD_R, 24, 24]} />
@@ -529,7 +524,6 @@ function HumanBody({
 export default function Body3DViewer({
   keypoints,
   keypointSequence,
-  activity,
   dominantMotionHz,
   breathingHz,
   minHeight = "clamp(460px, 62vh, 860px)",
@@ -588,17 +582,16 @@ export default function Body3DViewer({
         RF Body Mesh · {replayLabel}
       </div>
 
-      {(activity || dominantMotionHz) && (
+      {dominantMotionHz && (
         <div style={{
           position: "absolute", top: 34, left: 12, zIndex: 10,
           fontSize: "0.58rem", fontWeight: 600, letterSpacing: "0.05em",
           color: "#7dd3fc", background: "rgba(34,211,238,0.08)",
           border: "1px solid rgba(34,211,238,0.25)",
           borderRadius: "0.25rem", padding: "1px 7px",
-          userSelect: "none", pointerEvents: "none", textTransform: "uppercase",
+          userSelect: "none", pointerEvents: "none",
         }}>
-          {(activity ?? "unknown").replace("_", " ")}
-          {dominantMotionHz ? ` · ${dominantMotionHz.toFixed(2)} Hz` : ""}
+          motion {dominantMotionHz.toFixed(2)} Hz
         </div>
       )}
 
@@ -683,7 +676,6 @@ export default function Body3DViewer({
           measurements={measurements}
           spinning={spinning}
           poseKeypoints={activeKeypoints}
-          activity={activity}
           breathingHz={breathingHz}
         />
 

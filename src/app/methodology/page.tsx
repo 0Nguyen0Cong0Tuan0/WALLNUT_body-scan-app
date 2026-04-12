@@ -85,7 +85,7 @@ export default function MethodologyPage() {
             WALLNUT (<strong className="text-[#c8d8e8]">W</strong>iFi-enabled <strong className="text-[#c8d8e8]">A</strong>daptive <strong className="text-[#c8d8e8]">LL</strong>-body <strong className="text-[#c8d8e8]">N</strong>ode <strong className="text-[#c8d8e8]">U</strong>nified <strong className="text-[#c8d8e8]">T</strong>elemetry) is a
             camera-free, contact-free body sensing platform. It passively analyses the multipath RF propagation
             changes caused by the human body in a standard 802.11 WiFi environment to extract:
-            respiratory rate, cardiac rate, heart rate variability (HRV), activity classification,
+            respiratory rate, cardiac rate, heart rate variability (HRV), temporal motion dynamics,
             and anthropometric body dimensions — all from standard consumer access points.
           </p>
 
@@ -127,7 +127,7 @@ export default function MethodologyPage() {
               ["1","CSI Ingestion",       "UDP datagram",              "Float32 amplitude + phase matrices", "Hardware / Networking"],
               ["2","DSP & Vitals",         "Amplitude time-series",     "Breathing Hz, HR bpm, HRV ms",       "Signal Processing"],
               ["3","Spatial Mapping",      "Subcarrier energy zones",   "COCO-17 pose proxies",               "Geometry / Antenna Physics"],
-              ["4","Temporal Kinematics",  "Sliding motion features",   "Activity label + confidence",        "Frequency Analysis"],
+              ["4","Temporal Kinematics",  "Sliding motion features",   "Motion dynamics + confidence",       "Frequency Analysis"],
               ["5","Biometric Inference",  "Pose + vitals features",    "Heights, widths, BF%, Qwen summary", "Anthropometry / AI"],
             ].map(row => (
               <tr key={row[0]}>
@@ -154,7 +154,7 @@ export default function MethodologyPage() {
         <p className={T.lead}>
           Modern 802.11n/ac/ax (WiFi 4/5/6) uses <strong className="text-[#c8d8e8]">Orthogonal Frequency Division Multiplexing (OFDM)</strong>,
           splitting the RF channel into 30–56 narrow subcarriers transmitted simultaneously. The receiver
-          reports the channel's response to each subcarrier as a <em>complex transfer function</em> per packet:
+          reports the channel&apos;s response to each subcarrier as a <em>complex transfer function</em> per packet:
         </p>
         <Formula>{"H[t, s] = A[t, s] · e^(j·φ[t, s])"}</Formula>
         <p className={T.body}>
@@ -172,7 +172,7 @@ export default function MethodologyPage() {
         </p>
         <div className="mt-4 grid sm:grid-cols-3 gap-4">
           {[
-            ["Doppler Shift", "Bulk body motion (walking = ±1–3 Hz at 5 GHz) creates a Doppler frequency shift fd = 2v/λ on reflected subcarriers. A 1 m/s movement at 5 GHz produces fd ≈ 33 Hz.", "#0ea5e9"],
+            ["Doppler Shift", "Bulk body motion creates a Doppler frequency shift fd = 2v/λ on reflected subcarriers. A 1 m/s movement at 5 GHz produces fd ≈ 33 Hz.", "#0ea5e9"],
             ["Micro-Doppler", "Sub-centimetre oscillations — chest expansion (breathing) and cardiac micro-tremor — create Doppler modulations of 0.1–2.0 Hz, extractable with narrow IIR bandpass filters.", "#8b5cf6"],
             ["Path-Length Δ", "Diaphragm displaces 1–2 cm per breath, changing the TX→body→RX path length. Phase shift Δφ = 2π·Δd·(2f/c) = detectable at ~0.5 rad/cm at 5 GHz.", "#22c55e"],
           ].map(([title, body, color]) => (
@@ -242,7 +242,7 @@ export default function MethodologyPage() {
         {/* ── Heart Rate ───────────────────────────────────────────────── */}
         <h3 className={T.h3}>2b. Ballistocardiography: Cardiac Micro-Vibration at 0.8–2.0 Hz</h3>
         <p className={T.body}>
-          Ventricular ejection during systole generates a mass-acceleration force on the body (Newton's 3rd Law),
+          Ventricular ejection during systole generates a mass-acceleration force on the body (Newton&apos;s 3rd Law),
           transmitted as micro-displacements of the thorax surface. These ballistic displacements are typically
           0.3–1.2 mm amplitude — measurable via the Doppler effect on WiFi subcarriers as a phase deviation of
           ~0.003 rad/mm at 5 GHz. The cardiac signal occupies <strong className="text-[#c8d8e8]">0.8–2.0 Hz</strong>
@@ -274,7 +274,7 @@ export default function MethodologyPage() {
         <p className={T.body}>
           RMSSD reflects <em>parasympathetic</em> (vagal) modulation of heart rate. Acetylcholine released by
           the vagus nerve accelerates sinus recovery between beats, increasing HRV. High sympathetic drive
-          (stress, exercise, inflammation) suppresses vagal activity, producing lower HRV.
+          (stress, exercise, inflammation) suppresses vagal modulation, producing lower HRV.
         </p>
 
         <div className="mt-5 overflow-x-auto">
@@ -321,7 +321,7 @@ export default function MethodologyPage() {
           Inspired by <strong className="text-[#c8d8e8]">DensePose from WiFi</strong> (Geng et al., CMU 2022),
           WALLNUT partitions the 56 subcarriers into <em>anatomical energy zones</em>. Each zone accumulates
           amplitude energy at a characteristic frequency for specific body regions due to the spatial variation
-          of the human body's RF scattering cross-section across the antenna aperture:
+          of the human body&apos;s RF scattering cross-section across the antenna aperture:
         </p>
         <Formula>{"Zone_k energy = Σ_{s∈Z_k} avg_t{ |A[t, s] − A_baseline[s]| }"}</Formula>
         <p className={T.body}>
@@ -360,11 +360,11 @@ export default function MethodologyPage() {
         <hr className={T.divider} />
 
         {/* ── Stage 4: Temporal Kinematics ──────────────────────────────── */}
-        <StageLabel n={4} title="Temporal Kinematics: Activity Classification via Motion DFT" />
+        <StageLabel n={4} title="Temporal Kinematics: Motion Dynamics via DFT" />
 
         <p className={T.lead}>
           A sliding-window Discrete Fourier Transform (window = 128 samples, 50% overlap, Hamming apodisation)
-          is applied to the full amplitude matrix to extract the dominant motion frequency:
+          is applied to the full amplitude matrix to extract dominant motion descriptors:
         </p>
         <Formula>{"f_dom = argmax_f |DFT{ A_motion[t, :] }|    Hz\n" +
                   "E_motion = mean_t{ std_s{ A[t, s] } }       (energy metric)"}</Formula>
@@ -373,17 +373,17 @@ export default function MethodologyPage() {
           <table className={T.table}>
             <thead>
               <tr>
-                {["Activity","f_dom (Hz)","E_motion","Physical Rationale"].map(h => (
+                {["Dynamics Band","f_dom (Hz)","E_motion","Interpretation"].map(h => (
                   <th key={h} className={T.th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {[
-                ["Walking",  "0.85–1.6",  "> 0.06", "Cadence 1.0–1.4 Hz + arm-swing harmonics"],
-                ["Standing", "0.3–0.8",   "< 0.08", "Vestibular micro-sway; no stride periodicity"],
-                ["Sitting",  "0.15–0.60", "< 0.06", "Respiratory modulation only; minimal limb motion"],
-                ["Fallen",   "< 0.25",    "< 0.045","Horizontal body → reduced RF cross-section; post-impact stillness"],
+                ["Quasi-static",   "< 0.30",    "< 0.05", "Minimal full-body motion; respiration dominates modulation"],
+                ["Low dynamic",    "0.30–0.70", "0.04–0.08", "Mild posture drift and limb sway with stable cadence"],
+                ["Moderate dynamic","0.70–1.20","0.06–0.12", "Clear periodic body movement with repeatable harmonics"],
+                ["High dynamic",   "> 1.20",    "> 0.10", "Fast multi-limb motion and stronger channel perturbation"],
               ].map(row => (
                 <tr key={row[0]}>
                   {row.map((cell, i) => (
@@ -402,9 +402,8 @@ export default function MethodologyPage() {
         </div>
 
         <Callout type="note">
-          The "Fallen" classification is particularly safety-critical. Three concurrent indicators are required
-          to trigger a fallen alert: (1) f_dom {'<'} 0.25 Hz, (2) E_motion {'<'} 0.045, and (3) mean subcarrier
-          amplitude {'<'} 42 dB — reducing false positives from subjects voluntarily lying down.
+          WALLNUT intentionally reports continuous motion dynamics and confidence instead of hard action labels.
+          This avoids over-claiming exact real-world user actions while still preserving temporal signal quality cues.
         </Callout>
 
         <hr className={T.divider} />
@@ -447,7 +446,7 @@ export default function MethodologyPage() {
         <p className={T.body}>
           The full biometric feature vector is submitted to <strong className="text-[#c8d8e8]">Qwen-Plus</strong>
           via the DashScope OpenAI-compatible endpoint with a system prompt encoding:
-          (i) the patient's specific metrics, (ii) retrieved RAG context from the MemPalace vector DB
+          (i) the patient&apos;s specific metrics, (ii) retrieved RAG context from the MemPalace vector DB
           (semantic search over 16+ curated WHO/AHA/IEEE knowledge chunks), and (iii) strict epistemic
           honesty instructions (accuracy caveats, no diagnosis, clinician referral triggers). The resulting
           2–4 paragraph clinical narrative is classified as <em>Qwen-sourced</em> (with RAG citation) or

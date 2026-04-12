@@ -171,25 +171,24 @@ KNOWLEDGE_ENTRIES = [
      >1.0 = shoulder-dominant (android tendency); <1.0 = hip-dominant (gynoid tendency).
      This is a proxy — not a clinical classification. DXA is gold standard for fat distribution."""),
 
-    # ── ACTIVITY CLASSIFICATION ───────────────────────────────────────────────
-    ("act_001", "wallnut_knowledge", "activity_classification",
-     """WALLNUT activity classification uses dominant motion frequency (dominantMotionHz) 
-     and global motion energy (motionEnergy = std/mean of CSI amplitude timeseries):
-     Walking: dominantMotionHz > 0.85 Hz AND motionEnergy > 0.06 — stride cadence creates 
-     broadband 1.0–1.4 Hz modulation with arm-swing harmonics.
-     Sitting: Hz 0.15–0.60 AND energy < 0.06 — dominated by respiratory modulation only.
-     Standing: energy < 0.08 — vestibular micro-sway at 0.3–0.8 Hz.
-     Fallen: Hz < 0.25 AND energy < 0.045 AND amplitude_mean < 42 dB — horizontal body 
-     reduces effective RF cross-section dramatically."""),
+    # ── TEMPORAL MOTION DYNAMICS ──────────────────────────────────────────────
+    ("dyn_001", "wallnut_knowledge", "temporal_motion",
+     """WALLNUT uses continuous temporal motion descriptors rather than hard action labels.
+     Core features:
+       dominantMotionHz = argmax_f |DFT(amplitude_timeseries)|
+       motionEnergy = std(amplitude_timeseries) / mean(amplitude_timeseries)
+       phaseStability = 1 - meanAbsCircularDiff(phase_matrix) / pi  (clamped)
+     These descriptors drive replay synthesis and confidence scoring while avoiding
+     over-claiming exact user actions in unconstrained real-world settings."""),
 
-    ("act_002", "wallnut_knowledge", "activity_classification",
-     """Fall detection via WiFi CSI is an active research area. Key signatures of a fallen 
-     individual: (1) amplitude step-drop: sudden large spike then decay as body impacts floor;
-     (2) horizontal re-orientation: body cross-section changes from ~1.8m vertical to ~0.45m 
-     horizontal, reducing the effective Fresnel zone obstruction; (3) very low motion energy 
-     after fall; (4) breathing signal may weaken if supine (reduced tidal volume).
-     WALLNUT's fallen classification confidence increases with: low Hz, low energy, and 
-     low RSSI mean — all consistent with a horizontal non-ambulatory subject."""),
+    ("dyn_002", "wallnut_knowledge", "temporal_motion",
+     """Interpreting temporal dynamics bands (action-neutral):
+       Quasi-static:   dominantMotionHz < 0.30 and motionEnergy < 0.05
+       Low dynamic:    0.30-0.70 Hz with moderate energy
+       Moderate:       0.70-1.20 Hz with clear periodic modulation
+       High dynamic:   >1.20 Hz and elevated energy
+     These bands describe signal behavior intensity and cadence, not a semantic
+     posture tag."""),
 ]
 
 # ─── Ingestion ─────────────────────────────────────────────────────────────────

@@ -90,7 +90,6 @@ export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }
           <Body3DViewer
             keypoints={frame.keypoints}
             keypointSequence={frame.keypointSequence}
-            activity={frame.temporal?.activity}
             dominantMotionHz={frame.temporal?.dominantMotionHz}
             breathingHz={frame.temporal?.breathingHz}
             minHeight="clamp(500px, 66vh, 920px)"
@@ -129,22 +128,10 @@ export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }
               <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--color-border)" }}>
                 <p className="font-semibold text-sm" style={{ color: "var(--color-text-primary)" }}>Motion Replay</p>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold badge-neutral">
-                  {frame.temporal.activity}
+                  {frame.temporal.durationSeconds.toFixed(1)}s
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="label">Confidence</p>
-                  <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
-                    {(frame.temporal.activityConfidence * 100).toFixed(0)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="label">Frames</p>
-                  <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
-                    {frame.temporal.sequenceLength}
-                  </p>
-                </div>
                 <div>
                   <p className="label">Dominant motion</p>
                   <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
@@ -152,9 +139,21 @@ export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }
                   </p>
                 </div>
                 <div>
-                  <p className="label">Playback rate</p>
+                  <p className="label">Motion energy</p>
                   <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
-                    {frame.temporal.fps.toFixed(1)} fps
+                    {frame.temporal.motionEnergy.toFixed(3)}
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Phase stability</p>
+                  <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
+                    {(frame.temporal.phaseStability * 100).toFixed(0)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Frames</p>
+                  <p className="metric text-lg font-medium mt-1" style={{ color: "var(--color-text-primary)" }}>
+                    {frame.temporal.sequenceLength}
                   </p>
                 </div>
               </div>
@@ -264,8 +263,6 @@ export function ResultsPanel({ frame, analysis, csiMeta, inputSource, onRescan }
             estimatedHeightCm:     frame.bodyMetrics.estimatedHeightCm,
             shoulderWidthCm:       frame.bodyMetrics.shoulderWidthCm,
             hipWidthCm:            frame.bodyMetrics.hipWidthCm,
-            activity:              frame.temporal?.activity ?? "unknown",
-            activityConfidence:    frame.temporal?.activityConfidence ?? 0.7,
             clinicalSummary:       analysis.clinicalSummary,
           }}
         />

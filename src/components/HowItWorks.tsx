@@ -90,28 +90,28 @@ const STAGES = [
   {
     id: "kinematics",
     number: "04",
-    title: "Temporal Kinematics & Activity Classification",
-    subtitle: "Sliding-Window DFT · Phase Stability · Activity Engine",
+    title: "Temporal Kinematics & Motion Dynamics",
+    subtitle: "Sliding-Window DFT · Phase Stability · Motion Engine",
     color: "#fb923c",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: 22, height: 22 }}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 1.5l-.5-1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
       </svg>
     ),
-    badges: ["Sliding Window DFT", "dominantMotionHz", "Phase Stability Score", "4-State Classifier"],
-    summary: "A sliding 1.0-second window runs a DFT scan over the centered amplitude timeseries to extract the dominant motion frequency at each time step. Combined with global motion energy and inter-frame phase stability, a deterministic rule engine classifies the subject into Walking, Sitting, Standing, or Fallen — each with a calibrated confidence score.",
+    badges: ["Sliding Window DFT", "dominantMotionHz", "Phase Stability Score", "Motion Dynamics"],
+    summary: "A sliding 1.0-second window runs a DFT scan over the centered amplitude timeseries to extract the dominant motion frequency at each time step. Combined with global motion energy and inter-frame phase stability, the engine derives continuous motion dynamics used for replay without forcing rigid action labels.",
     technical: [
       {
-        label: "Activity Classification Thresholds",
-        detail: "Walking: dominantMotionHz > 0.85 AND motionEnergy > 0.06 → stride cadence + bilateral arm swing. Fallen: Hz < 0.25 AND energy < 0.045 AND meanAmp < 42 dB → horizontal body reorientation. Sitting: Hz 0.15–0.60, energy < 0.06 → capped-respiration only. Standing: energy < 0.08 → vestibular micro-sway.",
+        label: "Motion Dynamics Scoring",
+        detail: "dominantMotionHz and motionEnergy are normalized into a continuous dynamics coefficient. Low values emphasize quasi-static replay, while higher values increase stride/arm oscillation and temporal deformation amplitude.",
       },
       {
         label: "Phase Stability Score",
-        detail: "phaseStability = clamp(1 − meanAbsCircularDiff / π, 0.35, 1.0). High stability = quasi-static (sitting/standing). Low stability = fast movement or RF interference. Influences per-frame confidence: C = 0.55 + 0.22·phaseStability + 0.12·motionScore.",
+        detail: "phaseStability = clamp(1 − meanAbsCircularDiff / π, 0.35, 1.0). High stability indicates cleaner quasi-static RF behavior, while low stability indicates fast motion or RF interference. Influences per-frame confidence: C = 0.55 + 0.22·phaseStability + 0.12·motionScore.",
       },
       {
         label: "Kinematic Synthesis",
-        detail: "For each hop window, synthesizePoseFrame() applies activity-specific mutations to the static base pose: Walking = sinusoidal knee/ankle stride + counter-phase arm swing at 1.25× Hz; Fallen = full horizontal keypoint remap; Sitting = fixed hip/knee offset + torso respiratory bob.",
+        detail: "For each hop window, synthesizePoseFrame() applies continuous, intensity-scaled motion mutations to the static base pose: bilateral stride oscillation, counter-phase arm swing, and breathing-coupled torso modulation.",
       },
     ],
   },
@@ -190,107 +190,6 @@ function TechnicalBlock({ label, detail }: { label: string; detail: string }) {
           {detail}
         </div>
       )}
-    </div>
-  );
-}
-
-function StageCard({ stage, isLast }: { stage: typeof STAGES[0]; isLast: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div style={{ display: "flex", gap: 0 }}>
-      {/* Timeline spine */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 48 }}>
-        {/* Number bubble */}
-        <button
-          onClick={() => setExpanded(e => !e)}
-          style={{
-            width: 40, height: 40, borderRadius: "50%", border: `2px solid ${stage.color}`,
-            background: expanded ? `${stage.color}20` : "#0d1117",
-            color: stage.color, fontSize: "0.75rem", fontWeight: 800,
-            fontFamily: "monospace", cursor: "pointer", flexShrink: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            transition: "background 0.2s",
-          }}
-        >
-          {stage.number}
-        </button>
-        {/* Connector line */}
-        {!isLast && (
-          <div style={{
-            width: 2, flex: 1, minHeight: 32,
-            background: `linear-gradient(to bottom, ${stage.color}60, #1e2a3500)`,
-            margin: "4px 0",
-          }} />
-        )}
-      </div>
-
-      {/* Card content */}
-      <div style={{ flex: 1, paddingLeft: 16, paddingBottom: isLast ? 0 : 24 }}>
-        {/* Header row */}
-        <button
-          onClick={() => setExpanded(e => !e)}
-          style={{
-            width: "100%", textAlign: "left", background: "none", border: "none",
-            cursor: "pointer", padding: 0, display: "flex", alignItems: "flex-start",
-            justifyContent: "space-between", gap: 12,
-          }}
-        >
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-              <span style={{ color: stage.color }}>{stage.icon}</span>
-              <span style={{
-                fontSize: "0.95rem", fontWeight: 700, color: "#e2e8f0",
-                letterSpacing: "-0.01em",
-              }}>
-                {stage.title}
-              </span>
-            </div>
-            <span style={{ fontSize: "0.7rem", color: "#4a8fa8", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-              {stage.subtitle}
-            </span>
-          </div>
-          <span style={{
-            color: "#4a8fa8", fontSize: "0.75rem", fontWeight: 600,
-            flexShrink: 0, marginTop: 4,
-            transform: expanded ? "rotate(180deg)" : "none",
-            transition: "transform 0.2s",
-            display: "inline-block",
-          }}>▾</span>
-        </button>
-
-        {/* Badge row — always visible */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-          {stage.badges.map(b => <Badge key={b} label={b} color={stage.color} />)}
-        </div>
-
-        {/* Expanded body */}
-        {expanded && (
-          <div style={{ marginTop: 14 }}>
-            {/* Summary paragraph */}
-            <p style={{
-              fontSize: "0.8rem", color: "#8fa8b8", lineHeight: 1.75,
-              marginBottom: 14,
-              padding: "10px 14px",
-              background: "#0a1018",
-              borderRadius: "0.5rem",
-              borderLeft: `3px solid ${stage.color}40`,
-            }}>
-              {stage.summary}
-            </p>
-
-            {/* Technical accordion items */}
-            <div>
-              <p style={{ fontSize: "0.65rem", color: "#4a637a", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-                Technical Detail
-              </p>
-              {stage.technical.map(t => (
-                <TechnicalBlock key={t.label} label={t.label} detail={t.detail} />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

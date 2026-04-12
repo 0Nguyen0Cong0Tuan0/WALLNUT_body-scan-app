@@ -1,5 +1,3 @@
-import type { RuViewFrame } from "@/lib/ruviewSimulator";
-
 export type InputMode = "upload" | "live" | "simulate";
 
 export type ScanState = "idle" | "connecting" | "processing" | "analyzing" | "results" | "error";
@@ -40,8 +38,6 @@ export interface PoseSequenceFrame {
 }
 
 export interface TemporalMeta {
-  activity: string;
-  activityConfidence: number;
   dominantMotionHz: number;
   breathingHz: number;
   motionEnergy: number;
@@ -51,12 +47,32 @@ export interface TemporalMeta {
   durationSeconds: number;
 }
 
-export type ScanFrame = Omit<RuViewFrame, "keypoints"> & {
+export interface ScanFrame {
+  timestamp: number;
+  nodeId: string;
+  channel: number;
+  subcarriers: number;
+  rssi: number;
+  vitals: {
+    heartRate: number;
+    breathingRate: number;
+    hrv: number;
+  };
+  bodyMetrics: {
+    estimatedHeightCm: number;
+    shoulderWidthCm: number;
+    hipWidthCm: number;
+    torsoLengthCm: number;
+    leftArmLengthCm: number;
+    rightArmLengthCm: number;
+    leftLegLengthCm: number;
+    bmi_proxy: number;
+  };
   keypoints: PoseKeypoint[];
   keypointSequence?: PoseSequenceFrame[];
   temporal?: TemporalMeta;
   csiMeta?: CsiMeta;
-};
+}
 
 export interface ScanRequest {
   mode: InputMode;

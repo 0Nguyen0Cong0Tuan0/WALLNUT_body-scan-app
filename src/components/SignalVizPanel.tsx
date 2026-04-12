@@ -17,7 +17,7 @@
  *  ported faithfully from the original.
  */
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export interface CSIFrame {
@@ -126,9 +126,9 @@ function PhasePlot({ phase }: { phase: Float32Array }) {
   phase.forEach(v => { mean += v; }); mean /= N_SC;
   let variance = 0;
   phase.forEach(v => { variance += (v - mean) ** 2; }); variance /= N_SC;
-  const activity = Math.min(1, variance / 2);
-  const h = Math.round((0.3 - activity * 0.15) * 360);
-  const l = Math.round((35 + activity * 30));
+  const motionIntensity = Math.min(1, variance / 2);
+  const h = Math.round((0.3 - motionIntensity * 0.15) * 360);
+  const l = Math.round((35 + motionIntensity * 30));
   const lineColor = `hsl(${h},100%,${l}%)`;
 
   return (
@@ -231,25 +231,25 @@ interface SignalVizProps {
 }
 
 export default function SignalVizPanel({ frame, compact = false }: SignalVizProps) {
-  const hist = useRef<Float32Array[]>(Array.from({ length: N_TIME }, () => new Float32Array(N_SC)));
   const elapsedRef = useRef(0);
-  const rafRef = useRef(0);
   const [current, setCurrent] = useState<CSIFrame>(() => generateDemoCSI(0));
-
-  const tick = useCallback(() => {
-    elapsedRef.current += 0.05;
-    const f = frame ?? generateDemoCSI(elapsedRef.current);
-    // Shift history
-    hist.current.shift();
-    hist.current.push(new Float32Array(f.amplitude));
-    setCurrent({ ...f });
-    rafRef.current = requestAnimationFrame(tick);
-  }, [frame]);
+  const [history, setHistory] = useState<Float32Array[]>(
+    () => Array.from({ length: N_TIME }, () => new Float32Array(N_SC))
+  );
 
   useEffect(() => {
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [tick]);
+    let animationFrameId = 0;
+    const tick = () => {
+      elapsedRef.current += 0.05;
+      const csiFrame = frame ?? generateDemoCSI(elapsedRef.current);
+      setHistory((prev) => [...prev.slice(1), new Float32Array(csiFrame.amplitude)]);
+      setCurrent({ ...csiFrame });
+      animationFrameId = requestAnimationFrame(tick);
+    };
+
+    animationFrameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [frame]);
 
   return (
     <>
@@ -280,7 +280,7 @@ export default function SignalVizPanel({ frame, compact = false }: SignalVizProp
         </div>
 
         {/* Heatmap */}
-        <AmplitudeHeatmap history={hist.current} />
+        <AmplitudeHeatmap history={history} />
 
         {/* Phase + Doppler side by side if not compact */}
         {compact ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import {
   getHistory,
   deleteScanRecord,
@@ -33,13 +33,6 @@ function bfColor(cls: string): string {
     Overfat: "#f97316", Obese: "#ef4444",
   };
   return map[cls] ?? "#64748b";
-}
-
-function activityIcon(a: string) {
-  if (a === "Walking")  return "⚡";
-  if (a === "Fallen")   return "⚠";
-  if (a === "Sitting")  return "⊙";
-  return "◎";  // Standing
 }
 
 // ─── Delete confirmation modal ────────────────────────────────────────────────
@@ -117,13 +110,6 @@ function ScanCard({
             </span>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
-            {/* Activity badge */}
-            <span style={{
-              fontSize: "0.62rem", color: "#a8b4bf",
-              background: "#1e2a35", borderRadius: "99px", padding: "1px 7px",
-            }}>
-              {activityIcon(record.activity)} {record.activity}
-            </span>
             {/* Source badge */}
             <span style={{
               fontSize: "0.62rem", color: "#4a637a",
@@ -217,7 +203,7 @@ function ScanCard({
               ["Hip W", `${record.bodyMetrics.hipWidthCm.toFixed(1)} cm`],
               ["Body Fat", `${record.bodyFatPercent.toFixed(1)}% (${record.bodyFatClassification})`],
               ["Est. Waist", `${record.estimatedWaistCm?.toFixed(0) ?? "—"} cm`],
-              ["Activity", record.activity],
+              ["Dominant Motion", Number.isFinite(record.dominantMotionHz) ? `${record.dominantMotionHz.toFixed(2)} Hz` : "—"],
             ].map(([label, value]) => (
               <div key={label} style={{ padding: "7px 10px", borderRadius: "0.5rem", background: "#0d1117", border: "1px solid #1e2a35" }}>
                 <div style={{ fontSize: "0.6rem", color: "#4a637a", marginBottom: 2 }}>{label}</div>
@@ -257,16 +243,11 @@ function ScanCard({
 
 // ─── History Page ─────────────────────────────────────────────────────────────
 export default function HistoryPage() {
-  const [records, setRecords] = useState<ScanRecord[]>([]);
+  const [records, setRecords] = useState<ScanRecord[]>(() => getHistory());
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [pendingClearAll, setPendingClearAll] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Load history from localStorage on mount
-  useEffect(() => {
-    setRecords(getHistory());
-  }, []);
 
   // ── Delete single record ─────────────────────────────────────────────────
   const handleDeleteConfirm = useCallback(() => {
@@ -296,7 +277,6 @@ export default function HistoryPage() {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
-      r.activity.toLowerCase().includes(q) ||
       r.bodyFatClassification.toLowerCase().includes(q) ||
       r.inputSource.includes(q) ||
       new Date(r.timestamp).toLocaleDateString().includes(q)
@@ -361,7 +341,7 @@ export default function HistoryPage() {
             background: "#060a0d", border: "1px solid #1e2a35",
             fontSize: "0.65rem", color: "#4a637a",
           }}>
-            🔒 All scan data is stored exclusively in this browser's localStorage. Nothing is sent to any server.
+            🔒 All scan data is stored exclusively in this browser&apos;s localStorage. Nothing is sent to any server.
             Deleting a record is immediate and permanent on your device.
           </div>
         </div>
@@ -371,7 +351,7 @@ export default function HistoryPage() {
           <div style={{ marginBottom: 16 }}>
             <input
               type="text"
-              placeholder="Filter by activity, body fat class, date…"
+              placeholder="Filter by body fat class, source, date…"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               style={{

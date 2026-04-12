@@ -8,7 +8,7 @@
  * This module now provides:
  *   - Vitals extraction (breathing/heart/HRV)
  *   - Static pose proxy estimation
- *   - Temporal activity + keypoint sequence synthesis for motion playback
+ *   - Temporal motion + keypoint sequence synthesis for replay
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,7 +44,6 @@ export interface PoseKeypoint {
 }
 
 export type DetectedFormat = "jsonl" | "proof_bundle" | "unknown";
-export type ActivityLabel = "standing" | "walking" | "sitting" | "fallen" | "unknown";
 
 export interface ParsedCSI {
   format: DetectedFormat;
@@ -84,8 +83,6 @@ export interface TemporalPoseFrame {
 }
 
 export interface TemporalPoseAnalysis {
-  activity: ActivityLabel;
-  activityConfidence: number;
   dominantMotionHz: number;
   breathingHz: number;
   motionEnergy: number;
@@ -588,52 +585,6 @@ function buildKeypointsFromProportions(
 
 // ─── Temporal pose synthesis ──────────────────────────────────────────────────
 
-function activityFromHint(hints: string[]): ActivityLabel | null {
-  const normalized = hints.map((hint) => hint.toLowerCase());
-  if (normalized.some((hint) => hint.includes("walking"))) return "walking";
-  if (normalized.some((hint) => hint.includes("sitting"))) return "sitting";
-  if (normalized.some((hint) => hint.includes("fallen") || hint.includes("lying"))) return "fallen";
-  if (normalized.some((hint) => hint.includes("standing"))) return "standing";
-  if (normalized.some((hint) => hint.includes("profile"))) return "standing";
-  return null;
-}
-
-function classifyActivity(parsed: ParsedCSI, dominantMotionHz: number, motionEnergy: number): {
-  activity: ActivityLabel;
-  confidence: number;
-} {
-  const hinted = activityFromHint(parsed.scenarioHints);
-  if (hinted) return { activity: hinted, confidence: 0.96 };
-
-  const meanAmp = mean(parsed.amplitudeTimeseries);
-
-  if (dominantMotionHz > 0.85 && motionEnergy > 0.06) {
-    return {
-      activity: "walking",
-      confidence: clamp(0.72 + (dominantMotionHz - 0.85) * 0.12 + (motionEnergy - 0.06) * 4, 0.72, 0.93),
-    };
-  }
-  if (meanAmp < 42 && dominantMotionHz < 0.25 && motionEnergy < 0.045) {
-    return {
-      activity: "fallen",
-      confidence: clamp(0.68 + (42 - meanAmp) * 0.012 + (0.25 - dominantMotionHz) * 0.4, 0.68, 0.90),
-    };
-  }
-  if (dominantMotionHz >= 0.15 && dominantMotionHz <= 0.6 && motionEnergy < 0.06 && meanAmp < 46) {
-    return {
-      activity: "sitting",
-      confidence: clamp(0.62 + (0.6 - dominantMotionHz) * 0.2 + (46 - meanAmp) * 0.01, 0.62, 0.88),
-    };
-  }
-  if (motionEnergy < 0.08) {
-    return {
-      activity: "standing",
-      confidence: clamp(0.58 + (0.08 - motionEnergy) * 2.4, 0.58, 0.85),
-    };
-  }
-  return { activity: "unknown", confidence: 0.50 };
-}
-
 function mutatePoint(
   keypoints: PoseKeypoint[],
   pointName: string,
@@ -648,30 +599,21 @@ function mutatePoint(
   point.confidence *= confidenceScale;
 }
 
-function setPointAbsolute(
-  keypoints: PoseKeypoint[],
-  pointName: string,
-  x: number,
-  y: number,
-  confidence = 0.8
-): void {
-  const point = keypoints.find((kp) => kp.point === pointName);
-  if (!point) return;
-  point.x = x;
-  point.y = y;
-  point.confidence = confidence;
-}
-
 function synthesizePoseFrame(
   basePose: PoseKeypoint[],
-  activity: ActivityLabel,
   motionPhase: number,
   breathingPhase: number,
-  motionScore: number
+  motionScore: number,
+  dominantMotionHz: number,
+  motionEnergy: number
 ): PoseKeypoint[] {
   const out = basePose.map((kp) => ({ ...kp, z: kp.z ?? 0.5 }));
   const motionGain = clamp(motionScore, 0.2, 2.2);
-  const sway = 0.010 * Math.sin(motionPhase * 0.5) * motionGain;
+  const cadenceFactor = clamp(dominantMotionHz / 1.2, 0, 1.4);
+  const energyFactor = clamp(motionEnergy / 0.09, 0, 1.4);
+  const dynamics = clamp(cadenceFactor * 0.45 + energyFactor * 0.55, 0.15, 1.4);
+
+  const sway = 0.008 * Math.sin(motionPhase * 0.5) * (0.5 + dynamics * 0.5);
   const breathingLift = 0.008 * Math.sin(breathingPhase);
 
   // Shared micro-motion
@@ -682,71 +624,29 @@ function synthesizePoseFrame(
     mutatePoint(out, p, sway * 0.5, breathingLift * -0.6, 1.0)
   );
 
-  if (activity === "walking") {
-    const stride = 0.028 + 0.018 * motionGain;
-    const lift = 0.020 + 0.020 * motionGain;
-    const armSwing = stride * 1.25;
-    const leftStep = Math.sin(motionPhase);
-    const rightStep = Math.sin(motionPhase + Math.PI);
+  const stride = (0.010 + 0.020 * dynamics) * Math.min(1.25, motionGain);
+  const lift = 0.006 + 0.018 * dynamics;
+  const armSwing = stride * 1.2;
+  const leftStep = Math.sin(motionPhase);
+  const rightStep = Math.sin(motionPhase + Math.PI);
 
-    mutatePoint(out, "left_hip", -0.010 * leftStep, 0.004 * Math.abs(leftStep), 0.98);
-    mutatePoint(out, "right_hip", -0.010 * rightStep, 0.004 * Math.abs(rightStep), 0.98);
+  mutatePoint(out, "left_hip", -0.008 * leftStep, 0.003 * Math.abs(leftStep), 0.99);
+  mutatePoint(out, "right_hip", -0.008 * rightStep, 0.003 * Math.abs(rightStep), 0.99);
 
-    mutatePoint(out, "left_knee", -0.028 * leftStep, -lift * Math.max(0, leftStep), 0.97);
-    mutatePoint(out, "right_knee", -0.028 * rightStep, -lift * Math.max(0, rightStep), 0.97);
-    mutatePoint(out, "left_ankle", -0.036 * leftStep, -0.65 * lift * Math.max(0, leftStep), 0.96);
-    mutatePoint(out, "right_ankle", -0.036 * rightStep, -0.65 * lift * Math.max(0, rightStep), 0.96);
+  mutatePoint(out, "left_knee", -stride * leftStep, -lift * Math.max(0, leftStep), 0.97);
+  mutatePoint(out, "right_knee", -stride * rightStep, -lift * Math.max(0, rightStep), 0.97);
+  mutatePoint(out, "left_ankle", -stride * 1.15 * leftStep, -0.65 * lift * Math.max(0, leftStep), 0.96);
+  mutatePoint(out, "right_ankle", -stride * 1.15 * rightStep, -0.65 * lift * Math.max(0, rightStep), 0.96);
 
-    mutatePoint(out, "left_elbow", armSwing * rightStep, 0.012 * Math.abs(rightStep), 0.98);
-    mutatePoint(out, "right_elbow", -armSwing * rightStep, 0.012 * Math.abs(rightStep), 0.98);
-    mutatePoint(out, "left_wrist", armSwing * 1.3 * rightStep, 0.022 * Math.abs(rightStep), 0.97);
-    mutatePoint(out, "right_wrist", -armSwing * 1.3 * rightStep, 0.022 * Math.abs(rightStep), 0.97);
-  } else if (activity === "sitting") {
-    const settle = 0.060 + 0.020 * motionGain;
-    const kneeBend = 0.050 + 0.010 * motionGain;
-    mutatePoint(out, "left_hip", -0.015, settle, 0.98);
-    mutatePoint(out, "right_hip", 0.015, settle, 0.98);
+  mutatePoint(out, "left_elbow", armSwing * rightStep, 0.010 * Math.abs(rightStep), 0.98);
+  mutatePoint(out, "right_elbow", -armSwing * rightStep, 0.010 * Math.abs(rightStep), 0.98);
+  mutatePoint(out, "left_wrist", armSwing * 1.25 * rightStep, 0.018 * Math.abs(rightStep), 0.97);
+  mutatePoint(out, "right_wrist", -armSwing * 1.25 * rightStep, 0.018 * Math.abs(rightStep), 0.97);
 
-    mutatePoint(out, "left_knee", -0.020, -kneeBend, 0.97);
-    mutatePoint(out, "right_knee", 0.020, -kneeBend, 0.97);
-    mutatePoint(out, "left_ankle", -0.050, -0.12, 0.93);
-    mutatePoint(out, "right_ankle", 0.050, -0.12, 0.93);
-
-    mutatePoint(out, "left_wrist", 0.080, 0.020, 0.95);
-    mutatePoint(out, "right_wrist", -0.080, 0.020, 0.95);
-    mutatePoint(out, "nose", 0, 0.015, 0.98);
-  } else if (activity === "fallen") {
-    const centerX = 0.5 + 0.015 * Math.sin(motionPhase * 0.2);
-    const centerY = 0.78 + 0.006 * Math.sin(breathingPhase);
-    const bodyLength = 0.56;
-
-    setPointAbsolute(out, "nose", centerX - bodyLength * 0.45, centerY - 0.03, 0.80);
-    setPointAbsolute(out, "left_eye", centerX - bodyLength * 0.47, centerY - 0.04, 0.78);
-    setPointAbsolute(out, "right_eye", centerX - bodyLength * 0.43, centerY - 0.02, 0.78);
-    setPointAbsolute(out, "left_ear", centerX - bodyLength * 0.49, centerY - 0.01, 0.75);
-    setPointAbsolute(out, "right_ear", centerX - bodyLength * 0.41, centerY + 0.01, 0.75);
-
-    setPointAbsolute(out, "left_shoulder", centerX - bodyLength * 0.28, centerY - 0.045, 0.84);
-    setPointAbsolute(out, "right_shoulder", centerX - bodyLength * 0.28, centerY + 0.045, 0.84);
-    setPointAbsolute(out, "left_elbow", centerX - bodyLength * 0.12, centerY - 0.055, 0.76);
-    setPointAbsolute(out, "right_elbow", centerX - bodyLength * 0.12, centerY + 0.055, 0.76);
-    setPointAbsolute(out, "left_wrist", centerX + bodyLength * 0.02, centerY - 0.060, 0.70);
-    setPointAbsolute(out, "right_wrist", centerX + bodyLength * 0.02, centerY + 0.060, 0.70);
-
-    setPointAbsolute(out, "left_hip", centerX + bodyLength * 0.08, centerY - 0.040, 0.83);
-    setPointAbsolute(out, "right_hip", centerX + bodyLength * 0.08, centerY + 0.040, 0.83);
-    setPointAbsolute(out, "left_knee", centerX + bodyLength * 0.25, centerY - 0.045, 0.78);
-    setPointAbsolute(out, "right_knee", centerX + bodyLength * 0.25, centerY + 0.045, 0.78);
-    setPointAbsolute(out, "left_ankle", centerX + bodyLength * 0.42, centerY - 0.035, 0.74);
-    setPointAbsolute(out, "right_ankle", centerX + bodyLength * 0.42, centerY + 0.035, 0.74);
-  } else {
-    // standing / unknown
-    const swayArms = 0.014 * Math.sin(motionPhase * 0.8) * Math.min(1, motionGain);
-    mutatePoint(out, "left_wrist", swayArms, 0.004 * Math.sin(motionPhase), 0.99);
-    mutatePoint(out, "right_wrist", -swayArms, 0.004 * Math.sin(motionPhase + Math.PI), 0.99);
-    mutatePoint(out, "left_ankle", 0.006 * Math.sin(motionPhase * 0.7), 0, 0.99);
-    mutatePoint(out, "right_ankle", -0.006 * Math.sin(motionPhase * 0.7), 0, 0.99);
-  }
+  const settle = (1 - clamp(dynamics, 0, 1)) * 0.018;
+  mutatePoint(out, "left_hip", -0.006, settle, 0.99);
+  mutatePoint(out, "right_hip", 0.006, settle, 0.99);
+  mutatePoint(out, "nose", 0, settle * 0.22, 0.99);
 
   for (const kp of out) {
     kp.x = clamp(kp.x, 0.03, 0.97);
@@ -780,7 +680,7 @@ function smoothSequence(sequence: TemporalPoseFrame[], alpha = 0.32): TemporalPo
 
 /**
  * Temporal motion pipeline:
- *   sliding window features -> activity inference -> keypoint sequence synthesis
+ *   sliding window features -> motion dynamics scoring -> keypoint sequence synthesis
  */
 export function analyzeTemporalPose(parsed: ParsedCSI): TemporalPoseAnalysis {
   const sampleRateHz = Math.max(1, parsed.sampleRateHz);
@@ -791,12 +691,6 @@ export function analyzeTemporalPose(parsed: ParsedCSI): TemporalPoseAnalysis {
   const dominantMotionHz = dominantFrequency(centered, sampleRateHz, 0.08, 2.5);
   const breathingHz = dominantFrequency(centered, sampleRateHz, 0.10, 0.60);
   const phaseStability = phaseStabilityScore(parsed.phaseMatrix);
-
-  const { activity, confidence: activityConfidence } = classifyActivity(
-    parsed,
-    dominantMotionHz,
-    motionEnergy
-  );
 
   const basePose = estimatePoseFromCSI(parsed).keypoints;
   const fps = sampleRateHz >= 80 ? 12 : 8;
@@ -820,7 +714,14 @@ export function analyzeTemporalPose(parsed: ParsedCSI): TemporalPoseAnalysis {
 
     const motionPhase = 2 * Math.PI * dominantMotionHz * t;
     const breathingPhase = 2 * Math.PI * breathingHz * t;
-    const keypoints = synthesizePoseFrame(basePose, activity, motionPhase, breathingPhase, motionScore);
+    const keypoints = synthesizePoseFrame(
+      basePose,
+      motionPhase,
+      breathingPhase,
+      motionScore,
+      dominantMotionHz,
+      motionEnergy
+    );
     const confidence = clamp(
       0.55 + 0.22 * phaseStability + 0.12 * Math.min(1.2, motionScore / 1.2),
       0.55,
@@ -851,8 +752,6 @@ export function analyzeTemporalPose(parsed: ParsedCSI): TemporalPoseAnalysis {
         ];
 
   return {
-    activity,
-    activityConfidence,
     dominantMotionHz: Number(dominantMotionHz.toFixed(3)),
     breathingHz: Number(breathingHz.toFixed(3)),
     motionEnergy: Number(motionEnergy.toFixed(4)),

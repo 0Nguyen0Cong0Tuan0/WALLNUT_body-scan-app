@@ -1,21 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUploadJob } from "@/lib/uploadJobs";
-import { UploadJobNotFoundError, toScanServiceError } from "@/lib/scanErrors";
+import { UploadJobNotFoundError } from "@/lib/scanErrors";
+import { buildScanErrorResponse } from "@/app/api/_shared/scanResponses";
 
 export const runtime = "nodejs";
-
-function buildErrorResponse(error: unknown) {
-  const scanError = toScanServiceError(error);
-  return NextResponse.json(
-    {
-      success: false,
-      error: scanError.message,
-      code: scanError.code,
-      details: scanError.details,
-    },
-    { status: scanError.status }
-  );
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -34,7 +22,7 @@ export async function GET(req: NextRequest) {
       ...job,
     });
   } catch (error) {
-    return buildErrorResponse(error);
+    return buildScanErrorResponse(error);
   }
 }
 

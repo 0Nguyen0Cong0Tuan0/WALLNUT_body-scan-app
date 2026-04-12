@@ -32,8 +32,6 @@ export interface ScanRecord {
   bodyFatClassification: string;  // "Healthy" | "Overfat" | "Obese" | "Underfat"
   estimatedWaistCm: number;
 
-  activity: string;
-  activityConfidence: number;
   dominantMotionHz: number;
 
   clinicalSummary: string;
