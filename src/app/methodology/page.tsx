@@ -10,8 +10,8 @@ export const metadata: Metadata = {
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 const T = {
-  page:     "min-h-screen bg-[#040810] text-[#c8d8e8]",
-  container:"max-w-5xl mx-auto px-5 py-12 sm:px-8",
+  page:     "w-full min-h-screen bg-[#040810] text-[#c8d8e8]",
+  container:"w-full max-w-4xl mx-auto px-4 py-12 sm:px-8",
   h1:       "text-3xl sm:text-4xl font-black tracking-tight text-white leading-tight",
   h2:       "text-xl font-bold text-[#e2e8f0] mt-16 mb-5 flex items-center gap-3",
   h3:       "text-base font-semibold text-[#7dd3fc] mt-8 mb-2",
