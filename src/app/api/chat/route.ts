@@ -87,6 +87,74 @@ function resolveDashScopeApiKey(): string | null {
   return normalizeApiKey(process.env.QWEN_API_KEY) ?? normalizeApiKey(process.env.DASHSCOPE_API_KEY);
 }
 
+// Validate if question is health/medical related by asking Qwen to evaluate
+async function validateQuestionIsHealthRelated(
+  question: string,
+  apiKey: string
+): Promise<{ isValid: boolean; reason?: string }> {
+  const validationPrompt = `You are a strict content validator for a medical health assistant. Your ONLY job is to determine if the user question is directly related to health, medical, wellness, fitness, body metrics, vital signs, or medical technology.
+
+STRICT RULES:
+- Health-related: Questions about vital signs, body composition, cardiovascular health, fitness, exercise, nutrition, wellness, medical scans, health metrics
+- NOT health-related: General knowledge, weather, news, entertainment, jokes, stories, math, coding, personal opinions, philosophy, history, geography
+
+User question: "${question}"
+
+Analyze carefully. Is this question asking about health/medical topics?
+
+Respond with EXACTLY one of these two formats (nothing else):
+VALID: [brief reason - e.g., "asks about heart rate and cardiovascular health"]
+INVALID: [brief reason - e.g., "asks about weather, not health-related"]
+
+Be EXTREMELY strict. If there's any doubt, mark as INVALID.`;
+
+  const validationBody = {
+    model: "qwen-plus",
+    messages: [{ role: "user", content: validationPrompt }],
+    temperature: 0.1, // Lower temperature for more consistent validation
+    max_tokens: 150,
+  };
+
+  try {
+    console.log("[CHAT API] Starting validation for question:", question);
+    
+    const response = await tryFetchWithFallback(DASHSCOPE_ENDPOINTS, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(validationBody),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) {
+      console.error("[CHAT API] Validation API error:", response.status);
+      // Fail-closed: reject if validation API fails
+      return { isValid: false, reason: "Validation service unavailable" };
+    }
+
+    const data = await response.json();
+    const answer = data.choices?.[0]?.message?.content?.trim() || "";
+    
+    console.log("[CHAT API] Raw validation response:", answer);
+    console.log("[CHAT API] Answer starts with VALID:", answer.toUpperCase().startsWith("VALID"));
+    console.log("[CHAT API] Answer starts with INVALID:", answer.toUpperCase().startsWith("INVALID"));
+    
+    // Must explicitly start with VALID to be accepted
+    if (answer.toUpperCase().startsWith("VALID")) {
+      return { isValid: true, reason: answer.replace(/^VALID:\s*/i, "") };
+    }
+    
+    // Anything else (including errors, empty, or unclear) is rejected
+    return { isValid: false, reason: answer.replace(/^INVALID:\s*/i, "") || "Question not clearly health-related" };
+  } catch (err) {
+    // Fail-closed: reject on any error
+    console.error("[CHAT API] Validation exception:", err);
+    return { isValid: false, reason: "Validation failed" };
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as ChatRequest;
@@ -109,7 +177,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Skip validation for clinical summary generation requests
     const isClinicalSummaryRequest = question.toLowerCase().includes("generate") && question.toLowerCase().includes("clinical summary");
+    
+    // Validate question is health-related (skip for internal/clinical summary requests)
+    if (!isClinicalSummaryRequest) {
+      console.log("[CHAT API] Validating question...");
+      const validation = await validateQuestionIsHealthRelated(question, apiKey);
+      
+      if (!validation.isValid) {
+        console.log("[CHAT API] Question rejected:", validation.reason);
+        return NextResponse.json({
+          answer: "I do not allow to answer this kind of question. I am specialized in health and wellness topics related to your WiFi CSI body scan results. Please ask me about your vital signs, body composition, cardiovascular health, or wellness recommendations.",
+          model: "qwen-plus",
+          validation: "rejected",
+        });
+      }
+      
+      console.log("[CHAT API] Question validated as health-related");
+    }
     
     let prompt: string;
     
