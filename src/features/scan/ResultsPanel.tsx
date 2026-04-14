@@ -281,14 +281,6 @@ export function ResultsPanel({ frame, analysis, diagnostics, csiMeta, inputSourc
           )}
         </div>
         <p className="text-BASE leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>{analysis.clinicalSummary}</p>
-        <div className="space-y-2 pt-4 mt-2 border-t" style={{ borderColor: "var(--color-border)" }}>
-          {analysis.recommendations.map((r, i) => (
-            <div key={i} className="flex gap-3 text-sm">
-              <span className="text-green-400 flex-shrink-0 mt-0.5">→</span>
-              <span className="leading-snug" style={{ color: "var(--color-text-secondary)" }}>{r}</span>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Posture note */}

@@ -1,7 +1,8 @@
 import { getServerDb, parseJsonField, stringifyJson } from "@/lib/serverDb";
 import { ModelAuthError, ModelConfigError, ModelProviderError } from "@/lib/scanErrors";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
 
-export type AnalysisModelId = "none" | "qwen-plus" | "qwen-turbo" | "qwen-max";
+export type AnalysisModelId = "none" | "qwen-turbo" | "qwen-plus" | "qwen-max";
 
 export interface AnalysisModelQuota {
   remainingCalls: number | null;
@@ -46,24 +47,52 @@ interface DashScopeErrorShape {
   type?: string;
 }
 
-// Endpoints to try in order (international first, then US as fallback)
+// Endpoints to try in order (international first, then China mainland fallback)
 const DASHSCOPE_ENDPOINTS = [
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-  //"https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
 ];
+
+// Create proxy agent if HTTP_PROXY is set
+function getProxyAgent(): ProxyAgent | undefined {
+  const proxyUrl = process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+  if (proxyUrl) {
+    return new ProxyAgent(proxyUrl);
+  }
+  return undefined;
+}
 
 async function tryFetchWithFallback(
   endpoints: string[],
   options: RequestInit
 ): Promise<Response> {
   let lastError: Error | null = null;
+  const proxyAgent = getProxyAgent();
   
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(`${endpoint}/chat/completions`, {
-        ...options,
-        keepalive: true,
-      });
+      // Use undici fetch with proxy support
+      let response: Response;
+      if (proxyAgent) {
+        const undiciResponse = await undiciFetch(`${endpoint}/chat/completions`, {
+          method: options.method,
+          headers: options.headers as Record<string, string>,
+          body: options.body as string,
+          signal: options.signal as AbortSignal,
+          dispatcher: proxyAgent,
+        });
+        // Convert undici Response to standard Response
+        response = new Response(undiciResponse.body as ReadableStream, {
+          status: undiciResponse.status,
+          statusText: undiciResponse.statusText,
+          headers: Object.fromEntries(undiciResponse.headers.entries()),
+        });
+      } else {
+        response = await fetch(`${endpoint}/chat/completions`, {
+          ...options,
+          keepalive: true,
+        });
+      }
       return response;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -73,11 +102,8 @@ async function tryFetchWithFallback(
   
   throw lastError || new Error("All endpoints failed");
 }
-const DEFAULT_MODEL_LIMITS: Record<Exclude<AnalysisModelId, "none">, number> = {
-  "qwen-plus": 400,
-  "qwen-turbo": 1200,
-  "qwen-max": 180,
-};
+// Default limits removed - using unlimited free tier indicator
+const UNLIMITED_QUOTA = null; // null indicates unlimited/free tier
 
 const QWEN_MODELS: Array<{
   modelId: Exclude<AnalysisModelId, "none">;
@@ -86,22 +112,22 @@ const QWEN_MODELS: Array<{
   dashscopeModel: string;
 }> = [
   {
-    modelId: "qwen-plus",
-    label: "Qwen Plus",
-    description: "Balanced quality and cost for clinical-style interpretation.",
-    dashscopeModel: "qwen-plus",
-  },
-  {
     modelId: "qwen-turbo",
     label: "Qwen Turbo",
-    description: "Faster and cheaper for high-volume scans.",
-    dashscopeModel: "qwen-turbo",
+    description: "Fastest and most cost-effective. Great for quick, routine scan analysis.",
+    dashscopeModel: "qwen-turbo-latest",
+  },
+  {
+    modelId: "qwen-plus",
+    label: "Qwen Plus",
+    description: "Balanced quality and speed. Best for most clinical-style interpretations.",
+    dashscopeModel: "qwen-plus-latest",
   },
   {
     modelId: "qwen-max",
     label: "Qwen Max",
-    description: "Highest quality, recommended for difficult cases.",
-    dashscopeModel: "qwen-max",
+    description: "Highest quality and reasoning. Best for complex or difficult cases.",
+    dashscopeModel: "qwen-max-latest",
   },
 ];
 
@@ -111,10 +137,17 @@ function normalizeApiKey(key?: string | null): string | null {
   return trimmed.replace(/^["']|["']$/g, "");
 }
 
+const VALID_MODEL_IDS: AnalysisModelId[] = [
+  "none",
+  "qwen-turbo",
+  "qwen-plus",
+  "qwen-max",
+];
+
 export function normalizeAnalysisModelId(value?: string | null): AnalysisModelId {
-  const candidate = (value ?? "").trim().toLowerCase() as AnalysisModelId;
-  if (candidate === "none") return "none";
-  if (candidate === "qwen-plus" || candidate === "qwen-turbo" || candidate === "qwen-max") {
+  const candidateRaw = (value ?? "").trim().toLowerCase();
+  const candidate = candidateRaw as AnalysisModelId;
+  if (VALID_MODEL_IDS.includes(candidate)) {
     return candidate;
   }
   return "none";
@@ -124,23 +157,9 @@ function resolveDashScopeApiKey(): string | null {
   return normalizeApiKey(process.env.QWEN_API_KEY) ?? normalizeApiKey(process.env.DASHSCOPE_API_KEY);
 }
 
-function parseModelLimitsFromEnv(): Record<Exclude<AnalysisModelId, "none">, number> | null {
-  const raw = process.env.QWEN_MODEL_QUOTA_LIMITS_JSON;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<Record<Exclude<AnalysisModelId, "none">, unknown>>;
-    return {
-      "qwen-plus": Number.isFinite(Number(parsed["qwen-plus"])) ? Math.max(0, Math.round(Number(parsed["qwen-plus"]))) : DEFAULT_MODEL_LIMITS["qwen-plus"],
-      "qwen-turbo": Number.isFinite(Number(parsed["qwen-turbo"])) ? Math.max(0, Math.round(Number(parsed["qwen-turbo"]))) : DEFAULT_MODEL_LIMITS["qwen-turbo"],
-      "qwen-max": Number.isFinite(Number(parsed["qwen-max"])) ? Math.max(0, Math.round(Number(parsed["qwen-max"]))) : DEFAULT_MODEL_LIMITS["qwen-max"],
-    };
-  } catch {
-    return null;
-  }
-}
-
-function resolveModelLimits(): Record<Exclude<AnalysisModelId, "none">, number> {
-  return parseModelLimitsFromEnv() ?? DEFAULT_MODEL_LIMITS;
+// Legacy function - now returns null since we use unlimited quota
+function parseModelLimitsFromEnv(): null {
+  return null;
 }
 
 function readModelUsage(modelId: Exclude<AnalysisModelId, "none">): ModelUsageRow | null {
@@ -229,12 +248,11 @@ function buildModelMessages(runtime: AnalysisRuntimeContext): Array<{ role: "use
 
 export function listAnalysisModelOptions(): AnalysisModelOption[] {
   const apiKeyConfigured = Boolean(resolveDashScopeApiKey());
-  const modelLimits = resolveModelLimits();
 
   const options: AnalysisModelOption[] = [
     {
       modelId: "none",
-      label: "Skip AI analysis",
+      label: "None",
       provider: "none",
       description: "Use deterministic rule engine only (no LLM call).",
       enabled: true,
@@ -251,8 +269,6 @@ export function listAnalysisModelOptions(): AnalysisModelOption[] {
   for (const model of QWEN_MODELS) {
     const usage = readModelUsage(model.modelId);
     const usedCalls = usage?.successful_calls ?? 0;
-    const limitCalls = modelLimits[model.modelId];
-    const remainingCalls = Math.max(0, limitCalls - usedCalls);
     const lastError = parseJsonField<Record<string, unknown> | null>(usage?.last_error_json, null);
     options.push({
       modelId: model.modelId,
@@ -264,11 +280,12 @@ export function listAnalysisModelOptions(): AnalysisModelOption[] {
         ? undefined
         : "Missing QWEN_API_KEY or DASHSCOPE_API_KEY.",
       skipAnalysis: false,
+      // Unlimited quota - using Alibaba Cloud's free tier (1M tokens)
       quota: {
-        remainingCalls,
-        limitCalls,
+        remainingCalls: null, // null = unlimited
+        limitCalls: null,
         usedCalls,
-        source: "tracked",
+        source: "unbounded",
       },
       ...(lastError?.message
         ? {

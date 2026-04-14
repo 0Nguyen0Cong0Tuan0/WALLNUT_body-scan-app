@@ -63,6 +63,125 @@ function TypingDots() {
   );
 }
 
+// ─── Simple markdown parser ───────────────────────────────────────────────────
+function parseMarkdown(text: string): React.ReactNode {
+  // Split by lines and process each
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let inList = false;
+  let listItems: React.ReactNode[] = [];
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={`ul-${elements.length}`} style={{ margin: "8px 0", paddingLeft: "20px" }}>
+          {listItems}
+        </ul>
+      );
+      listItems = [];
+    }
+    inList = false;
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    
+    // Headers (###, ##, **text**)
+    if (trimmed.startsWith("### ")) {
+      flushList();
+      elements.push(
+        <h4 key={idx} style={{ margin: "12px 0 8px", fontSize: "0.9rem", fontWeight: 700, color: "#e2e8f0" }}>
+          {parseInlineMarkdown(trimmed.substring(4))}
+        </h4>
+      );
+    } else if (trimmed.startsWith("## ")) {
+      flushList();
+      elements.push(
+        <h3 key={idx} style={{ margin: "14px 0 10px", fontSize: "1rem", fontWeight: 700, color: "#e2e8f0" }}>
+          {parseInlineMarkdown(trimmed.substring(3))}
+        </h3>
+      );
+    } else if (trimmed.startsWith("**") && trimmed.endsWith("**") && !trimmed.includes(" ")) {
+      // Section headers like **1. TITLE**
+      flushList();
+      elements.push(
+        <h3 key={idx} style={{ margin: "14px 0 10px", fontSize: "0.95rem", fontWeight: 700, color: "#e2e8f0" }}>
+          {parseInlineMarkdown(trimmed)}
+        </h3>
+      );
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
+      // List items
+      inList = true;
+      listItems.push(
+        <li key={idx} style={{ margin: "4px 0" }}>
+          {parseInlineMarkdown(trimmed.substring(2))}
+        </li>
+      );
+    } else if (trimmed === "") {
+      // Empty line
+      if (inList) {
+        flushList();
+      }
+    } else {
+      flushList();
+      elements.push(
+        <p key={idx} style={{ margin: "8px 0" }}>
+          {parseInlineMarkdown(trimmed)}
+        </p>
+      );
+    }
+  });
+
+  flushList();
+  return <>{elements}</>;
+}
+
+// Parse inline markdown (**bold**, *italic*)
+function parseInlineMarkdown(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let current = "";
+  let i = 0;
+
+  while (i < text.length) {
+    if (text.substring(i, i + 2) === "**") {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      const end = text.indexOf("**", i + 2);
+      if (end !== -1) {
+        parts.push(<strong key={i} style={{ fontWeight: 700, color: "#fff" }}>{text.substring(i + 2, end)}</strong>);
+        i = end + 2;
+      } else {
+        current += "**";
+        i += 2;
+      }
+    } else if (text[i] === "*" && text[i + 1] !== "*") {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      const end = text.indexOf("*", i + 1);
+      if (end !== -1) {
+        parts.push(<em key={i} style={{ fontStyle: "italic" }}>{text.substring(i + 1, end)}</em>);
+        i = end + 1;
+      } else {
+        current += "*";
+        i++;
+      }
+    } else {
+      current += text[i];
+      i++;
+    }
+  }
+
+  if (current) {
+    parts.push(current);
+  }
+
+  return <>{parts}</>;
+}
+
 // ─── Message bubble ────────────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === "user";
@@ -89,7 +208,11 @@ function Bubble({ msg }: { msg: ChatMessage }) {
         fontSize: "0.8rem", lineHeight: 1.65,
         boxShadow: isUser ? "0 2px 8px #0ea5e920" : "none",
       }}>
-        <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+        {isUser ? (
+          <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+        ) : (
+          parseMarkdown(msg.text)
+        )}
       </div>
     </div>
   );

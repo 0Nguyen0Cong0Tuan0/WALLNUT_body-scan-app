@@ -12,6 +12,7 @@ interface ChatRequest {
     estimatedHeightCm: number;
     shoulderWidthCm: number;
     hipWidthCm: number;
+    clinicalSummary?: string;
   };
 }
 
@@ -108,20 +109,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const prompt = `You are a helpful health and wellness assistant analyzing WiFi CSI (Channel State Information) body scan results.
+    const prompt = `You are a clinical health analyst generating a professional WiFi CSI (Channel State Information) body scan report. Analyze the following biometric data and produce a structured, medically-informed assessment.
 
-Current scan metrics:
+=== PATIENT BIOMETRIC DATA ===
+VITAL SIGNS:
 - Heart Rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm
-- Breathing Rate: ${scanMetrics.breathingRateBpm.toFixed(0)} bpm
-- HRV: ${scanMetrics.hrv.toFixed(0)} ms
-- Body Fat: ${scanMetrics.bodyFatPercent.toFixed(1)}% (${scanMetrics.bodyFatClassification})
+- Breathing Rate: ${scanMetrics.breathingRateBpm.toFixed(0)} breaths/min
+- Heart Rate Variability (HRV): ${scanMetrics.hrv.toFixed(0)} ms
+
+BODY COMPOSITION:
+- Body Fat Percentage: ${scanMetrics.bodyFatPercent.toFixed(1)}%
+- Classification: ${scanMetrics.bodyFatClassification}
 - Estimated Height: ${scanMetrics.estimatedHeightCm.toFixed(0)} cm
 - Shoulder Width: ${scanMetrics.shoulderWidthCm.toFixed(1)} cm
 - Hip Width: ${scanMetrics.hipWidthCm.toFixed(1)} cm
 
+${scanMetrics.clinicalSummary ? `PREVIOUS AI ANALYSIS: ${scanMetrics.clinicalSummary}` : ""}
+
+=== CLINICAL REFERENCE RANGES ===
+Heart Rate: 60-100 bpm (normal), <60 (bradycardia), >100 (tachycardia)
+Breathing Rate: 12-20 breaths/min (normal), <12 (bradypnea), >20 (tachypnea)
+HRV: 20-50 ms (typical adult range, higher indicates better autonomic function)
+Body Fat: <14% (athletic), 14-17% (fitness), 18-24% (acceptable), 25-31% (overweight), >31% (obese)
+
+=== YOUR TASK ===
+Generate a professional clinical summary with the following structure:
+
+**1. VITAL SIGNS ASSESSMENT**
+Evaluate each vital sign against reference ranges. State if each is normal, elevated, or reduced. Provide brief clinical significance.
+
+**2. CARDIOVASCULAR HEALTH PROFILE**
+Analyze the interplay between heart rate, breathing rate, and HRV. Assess autonomic nervous system balance and cardiovascular efficiency.
+
+**3. BODY COMPOSITION ANALYSIS**
+Interpret body fat percentage and classification. Calculate and mention waist-to-hip ratio (shoulder width as proxy). Assess metabolic health implications.
+
+**4. OVERALL WELLNESS SUMMARY**
+Synthesize findings into a concise paragraph (3-5 sentences) providing holistic health assessment.
+
+**5. PERSONALIZED RECOMMENDATIONS**
+Provide 3-4 specific, actionable recommendations based on the data:
+- Exercise guidance tailored to body composition
+- Stress management if HRV suggests sympathetic dominance
+- Breathing exercises if respiratory rate is elevated
+- Lifestyle adjustments for body fat optimization
+
+=== FORMATTING REQUIREMENTS ===
+- Use professional medical terminology appropriate for patient education
+- Bold key metrics when first mentioned (e.g., **Heart Rate: 72 bpm**)
+- Use bullet points (-) for lists
+- Include section headers exactly as shown above
+- Keep total response under 400 words
+- End with: "**Disclaimer**: This analysis is for educational purposes only and does not constitute medical advice. Consult a healthcare provider for personalized medical guidance."
+
 User question: ${question}
 
-Provide a helpful, educational response about their scan results. Keep responses concise (2-4 sentences). If they ask about health risks, include a disclaimer that this is educational info, not medical advice.`;
+If the question is specific, address it directly within the relevant section. If general, provide the complete structured assessment above.`;
 
     console.log("[CHAT API] Sending request to DashScope...");
     
@@ -133,8 +176,8 @@ Provide a helpful, educational response about their scan results. Keep responses
           content: prompt,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.5,
+      max_tokens: 10000, 
     };
     
     console.log("[CHAT API] Request:", {

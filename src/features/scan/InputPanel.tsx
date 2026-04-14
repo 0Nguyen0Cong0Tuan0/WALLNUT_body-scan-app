@@ -28,11 +28,7 @@ interface AnalysisModelsResponse {
   error?: string;
 }
 
-function formatQuota(model: AnalysisModelOption): string {
-  if (model.quota.source === "none") return "N/A";
-  if (model.quota.limitCalls === null || model.quota.remainingCalls === null) return "Unbounded";
-  return `${model.quota.remainingCalls}/${model.quota.limitCalls} calls`;
-}
+// Clean model labels - no category badges needed
 
 export function InputPanel({ onScan, error, uploadProgress }: {
   onScan: (request: ScanRequest) => void;
@@ -48,7 +44,7 @@ export function InputPanel({ onScan, error, uploadProgress }: {
   const [modelOptions, setModelOptions] = useState<AnalysisModelOption[]>([
     {
       modelId: "none",
-      label: "Skip AI analysis",
+      label: "None",
       provider: "none",
       description: "Use deterministic rule engine only.",
       enabled: true,
@@ -248,7 +244,7 @@ export function InputPanel({ onScan, error, uploadProgress }: {
               value={model.modelId}
               disabled={!model.enabled && !model.skipAnalysis}
             >
-              {model.label} ({formatQuota(model)})
+              {model.label}
             </option>
           ))}
         </select>
@@ -260,11 +256,6 @@ export function InputPanel({ onScan, error, uploadProgress }: {
         {selectedModel && (
           <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
             {selectedModel.description}
-          </p>
-        )}
-        {selectedModel && selectedModel.quota.source !== "none" && (
-          <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-            Remaining quota: {formatQuota(selectedModel)}
           </p>
         )}
         {selectedModel?.disabledReason && !selectedModel.skipAnalysis && (
