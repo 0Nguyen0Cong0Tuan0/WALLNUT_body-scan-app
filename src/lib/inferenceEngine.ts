@@ -124,7 +124,6 @@ export interface InferenceOptions {
   baselineApplied?: boolean;
   driftCompensationStrength?: number;
   analysisModel?: string | null;
-  ragContext?: string | null;
 }
 
 export interface InferenceResult {
@@ -557,7 +556,6 @@ export async function runInferenceEngine(
     try {
       const modelResult = await runAnalysisModel(selectedModel, {
         prompt,
-        ragContext: options?.ragContext,
       });
       if (!modelResult) {
         analysis = ruleBasedAnalysis(vitals, bodyMetrics);

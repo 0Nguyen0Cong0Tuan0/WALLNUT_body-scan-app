@@ -23,7 +23,7 @@ src/
     methodology/page.tsx          # technical whitepaper
     api/
       _shared/scanResponses.ts    # shared API error/parse helpers
-      chat/route.ts               # chat proxy to external RAG service
+      chat/route.ts               # direct Qwen chat endpoint
       scan/route.ts               # live + simulate scan endpoint
       scan/upload/route.ts        # upload job creation
       scan/upload/progress/route.ts
@@ -73,8 +73,7 @@ npm run build
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `RAG_SERVER_URL` | Upstream RAG/chat service base URL used by `/api/chat` | `http://localhost:8787` |
-| `QWEN_API_KEY` / `DASHSCOPE_API_KEY` | Qwen access key used by inference engine | unset |
+| `QWEN_API_KEY` / `DASHSCOPE_API_KEY` | Qwen access key used by inference engine and chat | unset |
 | `LIVE_CSI_UDP_PORT` | UDP port for live CSI capture | `8080` |
 | `LIVE_PRE_SCAN_TIMEOUT_MS` | packet probe timeout before live scan rejection | `45` |
 | `LIVE_CAPTURE_MAX_PACKETS` | max packets collected per live capture | `96` |

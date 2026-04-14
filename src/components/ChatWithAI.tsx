@@ -18,8 +18,6 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
-  ragUsed?: boolean;
-  model?: string;
 }
 
 interface Props {
@@ -91,16 +89,6 @@ function Bubble({ msg }: { msg: ChatMessage }) {
         fontSize: "0.8rem", lineHeight: 1.65,
         boxShadow: isUser ? "0 2px 8px #0ea5e920" : "none",
       }}>
-        {msg.ragUsed && !isUser && (
-          <div style={{
-            fontSize: "0.58rem", color: "#4a8fa8", fontWeight: 600,
-            letterSpacing: "0.07em", textTransform: "uppercase",
-            marginBottom: 5, display: "flex", alignItems: "center", gap: 4,
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#22d3ee", display: "inline-block" }} />
-            RAG · MemPalace · {msg.model ?? "qwen-plus"}
-          </div>
-        )}
         <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
       </div>
     </div>
@@ -110,7 +98,7 @@ function Bubble({ msg }: { msg: ChatMessage }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function ChatWithAI({ scanMetrics }: Props) {
   const WELCOME: ChatMessage = {
-    id: "welcome", role: "assistant", ragUsed: false,
+    id: "welcome", role: "assistant",
     text: `Hello! I'm analysing your WALLNUT scan:\n• Heart rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm  • HRV: ${scanMetrics.hrv.toFixed(0)} ms  • Body fat: ${scanMetrics.bodyFatPercent.toFixed(1)}% (${scanMetrics.bodyFatClassification})\n\nAsk me anything about your results or the WiFi sensing technology.`,
   };
 
@@ -143,10 +131,10 @@ export default function ChatWithAI({ scanMetrics }: Props) {
         const err = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
-      const data = await res.json() as { answer: string; rag_used: boolean; model: string };
+      const data = await res.json() as { answer: string };
       setMessages(prev => [...prev, {
         id: `a${Date.now()}`, role: "assistant",
-        text: data.answer, ragUsed: data.rag_used, model: data.model,
+        text: data.answer,
       }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connection error");
@@ -187,7 +175,7 @@ export default function ChatWithAI({ scanMetrics }: Props) {
             <div>
               <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "#e2e8f0" }}>Chat with AI</div>
               <div style={{ fontSize: "0.62rem", color: "#4a8fa8" }}>
-                Qwen-Plus · MemPalace RAG · Scan-aware context
+                Qwen-Plus · Scan-aware context
               </div>
             </div>
           </div>

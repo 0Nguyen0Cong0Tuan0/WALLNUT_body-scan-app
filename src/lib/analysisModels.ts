@@ -30,8 +30,6 @@ export interface AnalysisModelResponse {
 
 export interface AnalysisRuntimeContext {
   prompt: string;
-  // Future-ready hook: when RAG is enabled, retrieved context can be injected here.
-  ragContext?: string | null;
 }
 
 interface ModelUsageRow {
@@ -48,7 +46,33 @@ interface DashScopeErrorShape {
   type?: string;
 }
 
-const DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+// Endpoints to try in order (international first, then US as fallback)
+const DASHSCOPE_ENDPOINTS = [
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  //"https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+];
+
+async function tryFetchWithFallback(
+  endpoints: string[],
+  options: RequestInit
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(`${endpoint}/chat/completions`, {
+        ...options,
+        keepalive: true,
+      });
+      return response;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Continue to next endpoint
+    }
+  }
+  
+  throw lastError || new Error("All endpoints failed");
+}
 const DEFAULT_MODEL_LIMITS: Record<Exclude<AnalysisModelId, "none">, number> = {
   "qwen-plus": 400,
   "qwen-turbo": 1200,
@@ -59,21 +83,25 @@ const QWEN_MODELS: Array<{
   modelId: Exclude<AnalysisModelId, "none">;
   label: string;
   description: string;
+  dashscopeModel: string;
 }> = [
   {
     modelId: "qwen-plus",
     label: "Qwen Plus",
     description: "Balanced quality and cost for clinical-style interpretation.",
+    dashscopeModel: "qwen-plus",
   },
   {
     modelId: "qwen-turbo",
     label: "Qwen Turbo",
     description: "Faster and cheaper for high-volume scans.",
+    dashscopeModel: "qwen-turbo",
   },
   {
     modelId: "qwen-max",
     label: "Qwen Max",
     description: "Highest quality, recommended for difficult cases.",
+    dashscopeModel: "qwen-max",
   },
 ];
 
@@ -162,10 +190,21 @@ function recordModelError(modelId: Exclude<AnalysisModelId, "none">, error: Reco
 
 function parseDashScopeError(payload: unknown): DashScopeErrorShape {
   if (!payload || typeof payload !== "object") return {};
+  
+  // DashScope native format: { code: "...", message: "...", request_id: "..." }
+  if ("code" in payload && "message" in payload) {
+    return {
+      code: String((payload as { code: unknown }).code),
+      message: String((payload as { message: unknown }).message),
+    };
+  }
+  
+  // OpenAI-compatible format: { error: { code: "...", message: "..." } }
   const err = (payload as { error?: unknown }).error;
   if (err && typeof err === "object") {
     return err as DashScopeErrorShape;
   }
+  
   return payload as DashScopeErrorShape;
 }
 
@@ -185,20 +224,7 @@ function parseJsonObjectContent(content: string): Record<string, unknown> {
 }
 
 function buildModelMessages(runtime: AnalysisRuntimeContext): Array<{ role: "user" | "system"; content: string }> {
-  if (!runtime.ragContext || runtime.ragContext.trim().length === 0) {
-    return [{ role: "user", content: runtime.prompt }];
-  }
-  return [
-    {
-      role: "system",
-      content:
-        "Retrieved knowledge is attached below. Prioritize it only when consistent with the provided scan metrics; otherwise rely on scan metrics.",
-    },
-    {
-      role: "user",
-      content: `${runtime.prompt}\n\n[RAG_CONTEXT]\n${runtime.ragContext.trim()}`,
-    },
-  ];
+  return [{ role: "user", content: runtime.prompt }];
 }
 
 export function listAnalysisModelOptions(): AnalysisModelOption[] {
@@ -270,16 +296,26 @@ export async function runAnalysisModel(
     });
   }
 
+  const modelConfig = QWEN_MODELS.find(m => m.modelId === selectedModel);
+  if (!modelConfig) {
+    throw new ModelConfigError("Invalid model ID.", { selectedModel });
+  }
+
+  const messages = buildModelMessages(runtime);
+  
   const requestBody = {
-    model: selectedModel,
-    messages: buildModelMessages(runtime),
+    model: modelConfig.dashscopeModel,
+    messages: messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    })),
     temperature: 0.2,
     response_format: { type: "json_object" as const },
   };
 
   let response: Response;
   try {
-    response = await fetch(`${DASHSCOPE_API_BASE}/chat/completions`, {
+    response = await tryFetchWithFallback(DASHSCOPE_ENDPOINTS, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -290,7 +326,7 @@ export async function runAnalysisModel(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     recordModelError(selectedModel, { stage: "network", message: reason });
-    throw new ModelProviderError("Unable to reach DashScope model endpoint.", {
+    throw new ModelProviderError("Unable to reach DashScope model endpoint. Tried: " + DASHSCOPE_ENDPOINTS.join(", "), {
       selectedModel,
       reason,
     });
@@ -305,6 +341,7 @@ export async function runAnalysisModel(
       type: parsedError.type,
       code: parsedError.code,
       message: parsedError.message,
+      rawPayload: payload,
     };
     recordModelError(selectedModel, { stage: "http", ...details });
     if (response.status === 401 || response.status === 403) {
@@ -316,11 +353,12 @@ export async function runAnalysisModel(
     throw new ModelProviderError(parsedError.message || "DashScope model call failed.", details);
   }
 
-  const content = (payload as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content;
+  const content = (payload as { choices?: Array<{ message?: { content?: string } }> })?.choices?.[0]?.message?.content;
   if (!content || typeof content !== "string") {
     recordModelError(selectedModel, {
       stage: "response_shape",
       message: "Missing choices[0].message.content",
+      rawPayload: payload,
     });
     throw new ModelProviderError("Model response is missing content.", {
       selectedModel,
@@ -329,7 +367,7 @@ export async function runAnalysisModel(
 
   const parsedContent = parseJsonObjectContent(content);
   const usageTokensRaw = Number(
-    (payload as { usage?: { total_tokens?: number } }).usage?.total_tokens
+    (payload as { usage?: { total_tokens?: number } })?.usage?.total_tokens
   );
   const usageTokens = Number.isFinite(usageTokensRaw)
     ? Math.max(0, Math.round(usageTokensRaw))

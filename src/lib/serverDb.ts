@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
 const globalWithDb = globalThis as typeof globalThis & {
@@ -9,7 +10,9 @@ const globalWithDb = globalThis as typeof globalThis & {
 function resolveDbPath(): string {
   const envPath = process.env.WALLNUT_DB_PATH;
   if (envPath && envPath.trim().length > 0) return path.resolve(envPath);
-  return path.join(process.cwd(), ".data", "wallnut.sqlite");
+  // Use temp directory to avoid Turbopack file watching issues
+  const tempDir = path.join(os.tmpdir(), "wallnut");
+  return path.join(tempDir, "wallnut.sqlite");
 }
 
 function ensureDbDirectory(filePath: string): void {
