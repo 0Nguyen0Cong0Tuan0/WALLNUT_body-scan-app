@@ -22,7 +22,7 @@ export function ProcessingView({
 }: {
   state: ScanState;
   progress?: number | null;
-  mode?: "upload" | "live" | "simulate" | null;
+  mode?: "upload" | "live" | "simulate" | "image" | null;
   analysisModel?: AnalysisModelId;
 }) {
   const selectedModel = analysisModel ?? "none";

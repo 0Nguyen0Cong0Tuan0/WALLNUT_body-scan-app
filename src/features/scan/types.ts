@@ -1,4 +1,4 @@
-export type InputMode = "upload" | "live" | "simulate";
+export type InputMode = "upload" | "live" | "simulate" | "image";
 export type AnalysisModelId = "none" | "qwen-plus" | "qwen-turbo" | "qwen-max";
 
 export type ScanState = "idle" | "connecting" | "processing" | "analyzing" | "results" | "error";
@@ -117,6 +117,9 @@ export interface ScanFrame {
 export interface ScanRequest {
   mode: InputMode;
   file?: File;
+  imageFile?: File;
+  heightCm?: number;
+  weightKg?: number;
   livePort?: number;
   analysisModel?: AnalysisModelId;
   calibrationProfileId?: string;

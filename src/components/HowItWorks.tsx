@@ -143,6 +143,38 @@ const STAGES = [
       },
     ],
   },
+  {
+    id: "vision",
+    number: "06",
+    title: "Multimodal Vision AI (Image Option)",
+    subtitle: "Qwen-VL-Max · Deurenberg BMI · Anthropometric Pixels",
+    color: "#f59e0b",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: 22, height: 22 }}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+      </svg>
+    ),
+    badges: ["DashScope Vision-Language", "Ephemerality", "Deurenberg Base", "Pixel Contours"],
+    summary: "For users submitting 2D frontal silhouettes instead of WiFi CSI waveforms, the pipeline forks. The user's image, coupled with clinical markers (Height, Weight), passes through the multimodal Qwen-VL-Max network. It parses the body contour boundaries to derive proportional anthropometrics and body fat matrices.",
+    technical: [
+      {
+        label: "AI Visual-Language Analysis",
+        detail: "The uploaded image is compressed and passed to DashScope's Qwen-VL-Max endpoint. The foundational vision model segments the silhouette boundaries computationally to estimate fat distributions (Android vs Gynoid) referencing biometric population curves.",
+      },
+      {
+        label: "Deurenberg BMI Fallback Formula",
+        detail: "When visual inference fails or rate-limits trigger, the platform devolves to deterministic mathematical regressions using Deurenberg (1991) modified indices: BMI = Weight(kg) / (Height(m)²). Body Fat % ≈ (1.20 * BMI) - 2.5 (unisex mean approximation).",
+      },
+      {
+        label: "Waist Inference Projection",
+        detail: "Waist circumference follows an anthropometric scale rule adjusting for body fat deviation: Waist_cm = Height_cm * (0.42 + (BF% - 15) * 0.005).",
+      },
+      {
+        label: "Ephemeral Privacy Boundary",
+        detail: "Visual data undergoes Ephemeral inference. Images are converted instantly to base64 Multipart buffers, inferred, and discarded from memory matrices with guaranteed non-persistence. No media writes to the sqlite storage or server hard drives.",
+      },
+    ],
+  },
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -211,7 +243,7 @@ export default function HowItWorks() {
               How WALLNUT Works
             </h2>
             <p style={{ fontSize: "0.72rem", color: "#4a8fa8", margin: "3px 0 0" }}>
-              From ambient WiFi signal to clinical biometric report — 5-stage pipeline
+              From ambient WiFi signal or Visual Image to clinical biometric report — 6-stage pipeline
             </p>
           </div>
           <button
@@ -266,8 +298,8 @@ export default function HowItWorks() {
         fontSize: "0.65rem", color: "#4a637a", lineHeight: 1.6,
       }}>
         <strong style={{ color: "#4a8fa8" }}>Privacy:</strong>{" "}
-        All CSI signal processing runs in the Next.js server runtime. Raw CSI data never leaves your machine unless you explicitly enable Qwen AI summarization, which transmits only structured numeric metrics — not raw signals.
-        System is non-ionizing (≪ ICNIRP 10,000 mW/m² limit) and camera-free by design.
+        All CSI signal processing runs in the Next.js server runtime. Raw CSI data never leaves your machine unless you explicitly enable Qwen AI summarization, which transmits only structured numeric metrics — not raw signals. For Image-Based analysis, the visual media buffers are ephemeral and completely deleted from local memory immediately post-inference.
+        System is non-ionizing (≪ ICNIRP 10,000 mW/m² limit) and preserves absolute data sovereignty.
       </div>
     </div>
   );

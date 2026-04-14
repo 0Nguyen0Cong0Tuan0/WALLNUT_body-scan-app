@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from "uuid";
 export interface ScanRecord {
   id: string;
   timestamp: number;       // Unix ms
-  inputSource: "simulate" | "upload" | "live";
+  inputSource: "simulate" | "upload" | "live" | "image";
 
   vitals: {
     heartRate: number;

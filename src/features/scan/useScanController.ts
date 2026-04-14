@@ -42,7 +42,7 @@ interface ScanResponse {
   error?: string;
 }
 
-function resolveHistoryInputSource(inputSource: string, mode: ScanRequest["mode"]): "simulate" | "upload" | "live" {
+function resolveHistoryInputSource(inputSource: string, mode: ScanRequest["mode"]): ScanRequest["mode"] {
   if (inputSource.includes("live")) return "live";
   if (inputSource.includes("simulate")) return "simulate";
   if (inputSource.includes("upload") || inputSource.includes("file")) return "upload";
@@ -68,7 +68,7 @@ export function useScanController() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [warningMsg, setWarningMsg] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [activeMode, setActiveMode] = useState<"upload" | "live" | "simulate" | null>(null);
+  const [activeMode, setActiveMode] = useState<"upload" | "live" | "simulate" | "image" | null>(null);
   const [activeAnalysisModel, setActiveAnalysisModel] = useState<AnalysisModelId>("none");
 
   // Function to generate Clinical Summary via Qwen AI
@@ -265,6 +265,41 @@ export function useScanController() {
     [applyResult]
   );
 
+  const runImageScan = useCallback(
+    async (request: ScanRequest) => {
+      if (!request.imageFile) throw new Error("Please select an image file.");
+      
+      const form = new FormData();
+      form.append("imageFile", request.imageFile);
+      if (request.heightCm) form.append("heightCm", String(request.heightCm));
+      if (request.weightKg) form.append("weightKg", String(request.weightKg));
+
+      // Always show analyzing step for image mode since it takes time
+      setScanState("analyzing");
+
+      const response = await fetch("/api/scan/image", {
+        method: "POST",
+        body: form,
+      });
+
+      const data = (await response.json()) as ScanResponse;
+      if (!response.ok || !data.success || !data.frame || !data.analysis || !data.inputSource || !data.diagnostics) {
+        throw new Error(data.error ?? "Image Analysis failed.");
+      }
+
+      await applyResult({
+        frame: data.frame,
+        analysis: data.analysis,
+        inputSource: data.inputSource,
+        diagnostics: data.diagnostics,
+      }, request.mode, request.analysisModel);
+
+      setScanState("results");
+      setUploadProgress(100);
+    },
+    [applyResult]
+  );
+
   const runScan = useCallback(
     async (request: ScanRequest) => {
       setErrorMsg(null);
@@ -283,6 +318,11 @@ export function useScanController() {
           return;
         }
 
+        if (request.mode === "image") {
+          await runImageScan(request);
+          return;
+        }
+
         await runDirectScan(request);
       } catch (error) {
         setErrorMsg(error instanceof Error ? error.message : String(error));
@@ -290,7 +330,7 @@ export function useScanController() {
         setUploadProgress(null);
       }
     },
-    [runDirectScan, runUploadScan]
+    [runDirectScan, runUploadScan, runImageScan]
   );
 
   const handleReset = useCallback(() => {

@@ -111,7 +111,7 @@ export default function MethodologyPage() {
         <StageLabel n={0} title="System Architecture Overview" />
         <p className={T.lead}>
           The pipeline transforms raw IQ‐hexadecimal CSI datagrams from ESP32 WiFi nodes into a
-          structured health report in five sequential stages corresponding to the physical phenomena
+          structured health report in six sequential stages corresponding to the physical phenomena
           being measured:
         </p>
         <table className={T.table}>
@@ -129,6 +129,7 @@ export default function MethodologyPage() {
               ["3","Spatial Mapping",      "Subcarrier energy zones",   "COCO-17 pose proxies",               "Geometry / Antenna Physics"],
               ["4","Temporal Kinematics",  "Sliding motion features",   "Motion dynamics + confidence",       "Frequency Analysis"],
               ["5","Biometric Inference",  "Pose + vitals features",    "Heights, widths, BF%, Qwen summary", "Anthropometry / AI"],
+              ["6","Vision Modality",      "2D Image + Height/Weight",  "Body Fat %, Pixels, Algebra",        "Multimodal AI / Math"],
             ].map(row => (
               <tr key={row[0]}>
                 {row.map((cell, i) => (
@@ -455,6 +456,48 @@ export default function MethodologyPage() {
 
         <hr className={T.divider} />
 
+        {/* ── Stage 6: Multimodal Vision-Language Anthropometry ─────────────── */}
+        <StageLabel n={6} title="Multimodal Vision-Language AI & Mathematical Anthropometry" />
+
+        <p className={T.lead}>
+          In configurations bypassing the passive WiFi RF channel, WALLNUT employs a secondary modality: processing optical silhouette contours using foundational vision AI, integrated with height and weight determinants. The visual modality relies on the DashScope Qwen-VL-Max architecture, supported by strict mathematical fallback regressions if inference layers fail.
+        </p>
+
+        <h3 className={T.h3}>6a. Qwen-VL-Max Generative Pixel Estimation</h3>
+        <p className={T.body}>
+          Frontal or profile images submitted to the server are ingested as Base64 multipart streams. The visual data is pipelined into Qwen-VL-Max using zero-shot prompt framing that specifies the subject&apos;s <em>Body Mass Index (BMI)</em> boundaries.
+          The visual-language model assesses orthogonal boundary contours, visceral depth approximations, and pixel segmentation ratios (Android/Gynoid ratios) to synthesize an estimated Body Fat %.
+        </p>
+        <Callout type="note">
+          Visual media undergoes rigid <strong>ephemeral execution</strong>. Images are held exclusively in volatile RAM buffering for the lifespan of the upstream DashScope request (typically 1–3 seconds) and are instantaneously dereferenced. No pixel matrices touch the hard drive or SQLite store.
+        </Callout>
+
+        <h3 className={T.h3}>6b. Deurenberg Regression Mathematics (Fallback Algorithm)</h3>
+        <p className={T.body}>
+          Since network topology limits or API quotas may randomly interrupt multimodal requests, WALLNUT deploys a deterministic fallback algorithm modeled on the Deurenberg (1991) pediatric and adult formulas. First, standard BMI is established:
+        </p>
+        <Formula>{"BMI = Weight_kg / ( Height_m )²"}</Formula>
+        <p className={T.body}>
+          The baseline Deurenberg equation is mathematically approximated for a generalized adult unisex profile to avert complex gender inputs in the UI:
+        </p>
+        <Formula>{"BodyFat%_approximation = (1.20 × BMI) − 2.5"}</Formula>
+        <p className={T.body}>
+          This derived regression ensures the system gracefully degrades from AI geometric parsing to pure algebraic proxies. 
+        </p>
+
+        <h3 className={T.h3}>6c. Ephemeral Anthropometric Scale Projection</h3>
+        <p className={T.body}>
+          To populate the 8 clinical circumferences purely from sparse variables (Height, Weight, resulting BF%), the engine models scaling constraints mathematically. 
+          Waist circumference acts as the central anchor projection, adjusting its baseline multiplier (0.42) against the deviation of the Body Fat % over a normative fit threshold of 15%:
+        </p>
+        <Formula>{"Waist_cm = Height_cm × [ 0.42 + ( (BF% − 15) × 0.005 ) ]\n" +
+                  "Neck_cm = Height_cm × 0.22"}</Formula>
+        <Callout type="clinical">
+          The algebraic estimation of circumferences assumes a standard biological scaling quotient. Extreme outliers (clinical dwarfism, extreme bodybuilding hypertrophy) violate the baseline Deurenberg bounds and will yield high outcome variance.
+        </Callout>
+
+        <hr className={T.divider} />
+
         {/* ── Limitations & References ──────────────────────────────────── */}
         <div className="mt-12">
           <h2 className="text-base font-bold text-[#e2e8f0] mb-5">Limitations & Known Artefacts</h2>
@@ -485,6 +528,7 @@ export default function MethodologyPage() {
             <li>Kouchi M., Mochimaru M. <em>CAESAR Japan Landmark Data.</em> AIST (2003).</li>
             <li>Ramanujan S. <em>Modular Equations and Approximations to π.</em> Q. J. Math. 45, 350–372 (1914).</li>
             <li>WHO. <em>Waist Circumference and Waist-Hip Ratio: Report of a WHO Expert Consultation.</em> Geneva (2011).</li>
+            <li>Deurenberg P. et al. <em>Body mass index as a measure of body fatness: age- and sex-specific prediction formulas.</em> British Journal of Nutrition (1991).</li>
           </ol>
         </div>
 

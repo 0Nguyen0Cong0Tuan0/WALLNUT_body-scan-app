@@ -421,10 +421,17 @@ export function ResultsPanel({ frame, analysis, diagnostics, csiMeta, inputSourc
       {/* ── How It Works — collapsible pipeline explainer ── */}
       <HowItWorksPanelWrapper />
 
-      <p className="text-center text-xs pb-4 pt-4" style={{ color: "var(--color-text-muted)" }}>
-        <span className="w-3 h-3 inline-block mr-1"><Icon.Lock /></span>
-        No camera. No biometric storage. WiFi RF analysis only.
-      </p>
+      {inputSource === "image" ? (
+        <p className="text-center text-xs pb-4 pt-4" style={{ color: "var(--color-text-muted)" }}>
+          <span className="w-3 h-3 inline-block mr-1"><Icon.Image /></span>
+          2D Image Anthropometric Estimation. Visual data processed via AI modeling.
+        </p>
+      ) : (
+        <p className="text-center text-xs pb-4 pt-4" style={{ color: "var(--color-text-muted)" }}>
+          <span className="w-3 h-3 inline-block mr-1"><Icon.Lock /></span>
+          No camera. No biometric storage. WiFi RF analysis only.
+        </p>
+      )}
     </div>
   );
 }

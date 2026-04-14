@@ -37,6 +37,9 @@ export function InputPanel({ onScan, error, uploadProgress }: {
 }) {
   const [mode, setMode] = useState<InputMode>("upload");
   const [file, setFile] = useState<File | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [heightCm, setHeightCm] = useState<string>("170");
+  const [weightKg, setWeightKg] = useState<string>("70");
   const [livePort, setLivePort] = useState("8080");
   const [liveStatus, setLiveStatus] = useState<LiveStatusResponse["status"] | null>(null);
   const [liveStatusLoading, setLiveStatusLoading] = useState(false);
@@ -162,13 +165,13 @@ export function InputPanel({ onScan, error, uploadProgress }: {
       {/* Mode selector */}
       <div>
         <p className="label mb-2">Input Source</p>
-        <div className="flex gap-1.5 p-1 rounded-lg" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-          {(["upload","live","simulate"] as InputMode[]).map(m => (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-1.5 p-1 rounded-lg" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+          {(["upload","live","simulate", "image"] as InputMode[]).map(m => (
             <button key={m} className={tabClass(m)} onClick={() => setMode(m)}>
               <span className="w-3.5 h-3.5">
-                {m === "upload" ? <Icon.Upload /> : m === "live" ? <Icon.Wifi /> : <Icon.Dice />}
+                {m === "upload" ? <Icon.Upload /> : m === "live" ? <Icon.Wifi /> : m === "image" ? <Icon.Image /> : <Icon.Dice />}
               </span>
-              {m === "upload" ? "File Upload" : m === "live" ? "Live Device" : "Simulate"}
+              <span className="truncate">{m === "upload" ? "File Upload" : m === "live" ? "Live Device" : m === "image" ? "Image (AI)" : "Simulate"}</span>
             </button>
           ))}
         </div>
@@ -176,6 +179,67 @@ export function InputPanel({ onScan, error, uploadProgress }: {
 
       {/* Mode content */}
       {mode === "upload" && <FileDropZone onFile={setFile} />}
+
+      {mode === "image" && (
+        <div className="space-y-4">
+          <div className="rounded-lg px-3 py-2.5 text-sm" style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", color: "var(--color-text-secondary)" }}>
+            Upload a 2D image (front or side profile) along with height and weight to estimate body fat with Multimodal AI.
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label block mb-1.5">Height (cm)</label>
+              <input
+                type="number"
+                min={100}
+                max={250}
+                value={heightCm}
+                onChange={e => setHeightCm(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-cyan-500/50"
+                style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} />
+            </div>
+            <div>
+              <label className="label block mb-1.5">Weight (kg)</label>
+              <input
+                type="number"
+                min={30}
+                max={250}
+                value={weightKg}
+                onChange={e => setWeightKg(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-cyan-500/50"
+                style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }} />
+            </div>
+          </div>
+          <div>
+            <label className="label block mb-1.5">Body Image</label>
+            <div 
+               className="w-full h-32 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-colors relative"
+               style={{ borderColor: "var(--color-border)", background: "var(--color-surface-2)" }}
+            >
+               <input
+                 type="file"
+                 accept="image/*"
+                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                 onChange={(e) => {
+                   if (e.target.files && e.target.files.length > 0) {
+                     setImageFile(e.target.files[0]);
+                   }
+                 }}
+               />
+               {imageFile ? (
+                 <div className="text-center px-4">
+                   <p className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>{imageFile.name}</p>
+                   <p className="text-[11px] mt-1" style={{ color: "var(--color-text-muted)" }}>{(imageFile.size / 1024 / 1024).toFixed(2)} MB • Click to replace</p>
+                 </div>
+               ) : (
+                 <div className="text-center">
+                   <div className="w-8 h-8 text-cyan-500/60 mx-auto mb-2"><Icon.Image /></div>
+                   <p className="text-sm font-medium" style={{ color: "var(--color-text-secondary)" }}>Click or drag image</p>
+                 </div>
+               )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {mode === "live" && (
         <div className="space-y-3">
@@ -274,15 +338,20 @@ export function InputPanel({ onScan, error, uploadProgress }: {
       <button
         id="run-scan-btn"
         onClick={() => {
-          if (runDisabled) return;
+          if (runDisabled && mode !== "image") return;
+          if (mode === "image" && !imageFile) return;
+          
           onScan({
             mode,
             file: mode === "upload" ? file ?? undefined : undefined,
+            imageFile: mode === "image" ? imageFile ?? undefined : undefined,
+            heightCm: mode === "image" ? Number(heightCm) : undefined,
+            weightKg: mode === "image" ? Number(weightKg) : undefined,
             livePort: mode === "live" ? parsedLivePort : undefined,
             analysisModel,
           });
         }}
-        disabled={runDisabled}
+        disabled={(runDisabled && mode !== "image") || (mode === "image" && !imageFile)}
         className="btn-primary w-full"
       >
         <span className="w-4 h-4"><Icon.Play /></span>
@@ -290,6 +359,10 @@ export function InputPanel({ onScan, error, uploadProgress }: {
           ? `Analyze "${file.name}"`
           : mode === "upload"
           ? "Select a file above"
+          : mode === "image" && imageFile
+          ? "Estimate Body Fat"
+          : mode === "image"
+          ? "Select an image"
           : mode === "live"
           ? "Validate Hardware & Scan"
           : "Run Simulated Scan"}
