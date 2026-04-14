@@ -21,6 +21,109 @@ const Body3DViewer = dynamic(() => import("@/components/Body3DViewer"), {
   ),
 });
 
+// Simple markdown parser for clinical summary
+function parseMarkdown(text: string): React.ReactNode {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let inList = false;
+  let listItems: React.ReactNode[] = [];
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={`ul-${elements.length}`} className="list-disc list-inside ml-4 my-2 space-y-1">
+          {listItems}
+        </ul>
+      );
+      listItems = [];
+    }
+    inList = false;
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    
+    // Headers with **text**
+    if (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4) {
+      flushList();
+      elements.push(
+        <h3 key={idx} className="text-base font-bold mt-4 mb-2 text-white">
+          {parseInlineMarkdown(trimmed)}
+        </h3>
+      );
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
+      // List items
+      inList = true;
+      listItems.push(
+        <li key={idx} className="text-sm leading-relaxed">
+          {parseInlineMarkdown(trimmed.substring(2))}
+        </li>
+      );
+    } else if (trimmed === "") {
+      // Empty line
+      if (inList) {
+        flushList();
+      }
+    } else {
+      flushList();
+      elements.push(
+        <p key={idx} className="text-sm leading-relaxed mb-2">
+          {parseInlineMarkdown(trimmed)}
+        </p>
+      );
+    }
+  });
+
+  flushList();
+  return <>{elements}</>;
+}
+
+// Parse inline markdown (**bold**, *italic*)
+function parseInlineMarkdown(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let current = "";
+  let i = 0;
+
+  while (i < text.length) {
+    if (text.substring(i, i + 2) === "**") {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      const end = text.indexOf("**", i + 2);
+      if (end !== -1) {
+        parts.push(<strong key={i} className="font-bold text-white">{text.substring(i + 2, end)}</strong>);
+        i = end + 2;
+      } else {
+        current += "**";
+        i += 2;
+      }
+    } else if (text[i] === "*" && text[i + 1] !== "*") {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      const end = text.indexOf("*", i + 1);
+      if (end !== -1) {
+        parts.push(<em key={i} className="italic">{text.substring(i + 1, end)}</em>);
+        i = end + 1;
+      } else {
+        current += "*";
+        i++;
+      }
+    } else {
+      current += text[i];
+      i++;
+    }
+  }
+
+  if (current) {
+    parts.push(current);
+  }
+
+  return <>{parts}</>;
+}
+
 function statusBadgeClass(classification: string) {
   const m: Record<string, string> = {
     Healthy: "badge-healthy", Underfat: "badge-caution",
@@ -280,7 +383,9 @@ export function ResultsPanel({ frame, analysis, diagnostics, csiMeta, inputSourc
             </span>
           )}
         </div>
-        <p className="text-BASE leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>{analysis.clinicalSummary}</p>
+        <div className="text-base leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
+          {analysis.clinicalSummary ? parseMarkdown(analysis.clinicalSummary) : null}
+        </div>
       </div>
 
       {/* Posture note */}

@@ -109,22 +109,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const prompt = `You are a clinical health analyst generating a professional WiFi CSI (Channel State Information) body scan report. Analyze the following biometric data and produce a structured, medically-informed assessment.
+    const isClinicalSummaryRequest = question.toLowerCase().includes("generate") && question.toLowerCase().includes("clinical summary");
+    
+    let prompt: string;
+    
+    if (isClinicalSummaryRequest) {
+      // Generate full clinical summary report
+      prompt = `You are a clinical health analyst generating a professional WiFi CSI (Channel State Information) body scan report. Analyze the following biometric data and produce a structured, medically-informed assessment.
 
 === PATIENT BIOMETRIC DATA ===
 VITAL SIGNS:
-- Heart Rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm
-- Breathing Rate: ${scanMetrics.breathingRateBpm.toFixed(0)} breaths/min
-- Heart Rate Variability (HRV): ${scanMetrics.hrv.toFixed(0)} ms
+• Heart Rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm
+• Breathing Rate: ${scanMetrics.breathingRateBpm.toFixed(0)} breaths/min
+• Heart Rate Variability (HRV): ${scanMetrics.hrv.toFixed(0)} ms
 
 BODY COMPOSITION:
-- Body Fat Percentage: ${scanMetrics.bodyFatPercent.toFixed(1)}%
-- Classification: ${scanMetrics.bodyFatClassification}
-- Estimated Height: ${scanMetrics.estimatedHeightCm.toFixed(0)} cm
-- Shoulder Width: ${scanMetrics.shoulderWidthCm.toFixed(1)} cm
-- Hip Width: ${scanMetrics.hipWidthCm.toFixed(1)} cm
-
-${scanMetrics.clinicalSummary ? `PREVIOUS AI ANALYSIS: ${scanMetrics.clinicalSummary}` : ""}
+• Body Fat Percentage: ${scanMetrics.bodyFatPercent.toFixed(1)}%
+• Classification: ${scanMetrics.bodyFatClassification}
+• Estimated Height: ${scanMetrics.estimatedHeightCm.toFixed(0)} cm
+• Shoulder Width: ${scanMetrics.shoulderWidthCm.toFixed(1)} cm
+• Hip Width: ${scanMetrics.hipWidthCm.toFixed(1)} cm
 
 === CLINICAL REFERENCE RANGES ===
 Heart Rate: 60-100 bpm (normal), <60 (bradycardia), >100 (tachycardia)
@@ -145,7 +149,7 @@ Analyze the interplay between heart rate, breathing rate, and HRV. Assess autono
 Interpret body fat percentage and classification. Calculate and mention waist-to-hip ratio (shoulder width as proxy). Assess metabolic health implications.
 
 **4. OVERALL WELLNESS SUMMARY**
-Synthesize findings into a concise paragraph (3-5 sentences) providing holistic health assessment.
+Synthesize findings into a concise paragraph providing holistic health assessment.
 
 **5. PERSONALIZED RECOMMENDATIONS**
 Provide 3-4 specific, actionable recommendations based on the data:
@@ -155,16 +159,33 @@ Provide 3-4 specific, actionable recommendations based on the data:
 - Lifestyle adjustments for body fat optimization
 
 === FORMATTING REQUIREMENTS ===
-- Use professional medical terminology appropriate for patient education
-- Bold key metrics when first mentioned (e.g., **Heart Rate: 72 bpm**)
-- Use bullet points (-) for lists
-- Include section headers exactly as shown above
-- Keep total response under 400 words
-- End with: "**Disclaimer**: This analysis is for educational purposes only and does not constitute medical advice. Consult a healthcare provider for personalized medical guidance."
+• Use professional medical terminology appropriate for patient education
+• Bold key metrics when first mentioned (e.g., **Heart Rate: 72 bpm**)
+• Use bullet points (•) for lists
+• Include section headers exactly as shown above
+• Keep total response under 400 words
+• End with: "**Disclaimer**: This analysis is for educational purposes only and does not constitute medical advice. Consult a healthcare provider for personalized medical guidance."
+
+Provide the complete structured clinical assessment above.`;
+    } else {
+      // Regular chat response
+      prompt = `You are a helpful health and wellness assistant analyzing WiFi CSI (Channel State Information) body scan results.
+
+Current scan metrics:
+• Heart Rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm
+• Breathing Rate: ${scanMetrics.breathingRateBpm.toFixed(0)} breaths/min
+• HRV: ${scanMetrics.hrv.toFixed(0)} ms
+• Body Fat: ${scanMetrics.bodyFatPercent.toFixed(1)}% (${scanMetrics.bodyFatClassification})
+• Estimated Height: ${scanMetrics.estimatedHeightCm.toFixed(0)} cm
+• Shoulder Width: ${scanMetrics.shoulderWidthCm.toFixed(1)} cm
+• Hip Width: ${scanMetrics.hipWidthCm.toFixed(1)} cm
+
+${scanMetrics.clinicalSummary ? `PREVIOUS CLINICAL SUMMARY: ${scanMetrics.clinicalSummary}` : ""}
 
 User question: ${question}
 
-If the question is specific, address it directly within the relevant section. If general, provide the complete structured assessment above.`;
+Provide a helpful, educational response about their scan results. Keep responses concise but informative (3-6 sentences). If they ask about health risks, include a disclaimer that this is educational info, not medical advice. Use markdown formatting (**bold** for emphasis, • for bullet points if listing items).`;
+    }
 
     console.log("[CHAT API] Sending request to DashScope...");
     

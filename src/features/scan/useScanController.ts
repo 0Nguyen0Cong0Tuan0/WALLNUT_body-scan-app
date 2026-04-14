@@ -71,13 +71,67 @@ export function useScanController() {
   const [activeMode, setActiveMode] = useState<"upload" | "live" | "simulate" | null>(null);
   const [activeAnalysisModel, setActiveAnalysisModel] = useState<AnalysisModelId>("none");
 
+  // Function to generate Clinical Summary via Qwen AI
+  const generateClinicalSummary = useCallback(async (frame: ScanFrame, baseAnalysis: Analysis): Promise<Analysis> => {
+    try {
+      const scanMetrics = {
+        heartRateBpm: frame.vitals.heartRate,
+        breathingRateBpm: frame.vitals.breathingRate,
+        hrv: frame.vitals.hrv,
+        bodyFatPercent: baseAnalysis.bodyFatPercent,
+        bodyFatClassification: baseAnalysis.bodyFatClassification,
+        estimatedHeightCm: frame.bodyMetrics.estimatedHeightCm,
+        shoulderWidthCm: frame.bodyMetrics.shoulderWidthCm,
+        hipWidthCm: frame.bodyMetrics.hipWidthCm,
+      };
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: "Generate a complete clinical summary report based on my scan data.",
+          scanMetrics,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("[Clinical Summary] Failed to generate:", res.status);
+        return baseAnalysis;
+      }
+
+      const data = await res.json() as { answer: string };
+      
+      // Return analysis with AI-generated clinical summary
+      return {
+        ...baseAnalysis,
+        clinicalSummary: data.answer,
+        source: "qwen",
+      };
+    } catch (err) {
+      console.error("[Clinical Summary] Error:", err);
+      return baseAnalysis;
+    }
+  }, []);
+
   const applyResult = useCallback(
-    (
+    async (
       data: { frame: ScanFrame; analysis: Analysis; inputSource: string; diagnostics: ScanDiagnostics },
-      requestMode: ScanRequest["mode"]
+      requestMode: ScanRequest["mode"],
+      analysisModel?: AnalysisModelId,
+      skipAiSummary?: boolean
     ) => {
+      // Use provided model or fall back to state
+      const modelToUse = analysisModel || activeAnalysisModel;
+      
+      // If AI model was selected, generate Clinical Summary via Qwen
+      let finalAnalysis = data.analysis;
+      if (!skipAiSummary && modelToUse && modelToUse !== "none") {
+        setScanState("analyzing");
+        finalAnalysis = await generateClinicalSummary(data.frame, data.analysis);
+      }
+
       setFrame(data.frame);
-      setAnalysis(data.analysis);
+      setAnalysis(finalAnalysis);
       setCsiMeta(data.frame.csiMeta);
       setDiagnostics(data.diagnostics);
       setInputSource(data.inputSource);
@@ -98,20 +152,20 @@ export function useScanController() {
             leftArmLengthCm: data.frame.bodyMetrics.leftArmLengthCm,
             leftLegLengthCm: data.frame.bodyMetrics.leftLegLengthCm,
           },
-          bodyFatPercent: data.analysis.bodyFatPercent,
-          bodyFatClassification: data.analysis.bodyFatClassification,
-          estimatedWaistCm: data.analysis.estimatedWaistCm,
+          bodyFatPercent: finalAnalysis.bodyFatPercent,
+          bodyFatClassification: finalAnalysis.bodyFatClassification,
+          estimatedWaistCm: finalAnalysis.estimatedWaistCm,
           dominantMotionHz: data.frame.temporal?.dominantMotionHz ?? 0,
-          clinicalSummary: data.analysis.clinicalSummary,
-          recommendations: data.analysis.recommendations,
-          postureNotes: data.analysis.postureNotes,
-          inferenceSource: data.analysis.source,
+          clinicalSummary: finalAnalysis.clinicalSummary,
+          recommendations: finalAnalysis.recommendations,
+          postureNotes: finalAnalysis.postureNotes,
+          inferenceSource: finalAnalysis.source,
         });
       } catch (persistError) {
         setWarningMsg(buildPersistenceWarning(persistError));
       }
     },
-    []
+    [activeAnalysisModel, generateClinicalSummary]
   );
 
   const runUploadScan = useCallback(
@@ -156,7 +210,7 @@ export function useScanController() {
         }
 
         if (stage === "completed" && progressData.result) {
-          applyResult(progressData.result, request.mode);
+          await applyResult(progressData.result, request.mode, request.analysisModel);
           setScanState("results");
           setUploadProgress(100);
           return;
@@ -195,17 +249,16 @@ export function useScanController() {
         throw new Error(data.error ?? "Scan failed.");
       }
 
-      if (request.analysisModel && request.analysisModel !== "none") {
-        setScanState("analyzing");
-      }
-      applyResult(
+      // Process result with AI summary if model selected
+      await applyResult(
         {
           frame: data.frame,
           analysis: data.analysis,
           inputSource: data.inputSource,
           diagnostics: data.diagnostics,
         },
-        request.mode
+        request.mode,
+        request.analysisModel
       );
       setScanState("results");
     },
