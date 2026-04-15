@@ -102,7 +102,10 @@ ${abstracts}
 
   // 4. Trigger MemPalace Mine
   try {
-    const mempalaceCmd = `.\\.venv\\Scripts\\mempalace.exe`;
+    const mempalaceCmd = process.platform === "win32" 
+      ? path.join(process.cwd(), ".venv", "Scripts", "mempalace.exe")
+      : path.join(process.cwd(), ".venv", "bin", "mempalace");
+      
     console.log("[AGENT MINE] Rebuilding vector database indices...");
     await execAsync(`${mempalaceCmd} mine .\\knowledge_base`, { 
       cwd: process.cwd(),

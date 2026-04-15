@@ -11,8 +11,10 @@ export async function searchMempalace(query: string): Promise<string> {
     
     // Path to the .venv python executable and mempalace
     const cwd = process.cwd();
-    // Assuming mempalace is installed in .venv/Scripts
-    const mempalaceCmd = `.\\.venv\\Scripts\\mempalace.exe`;
+    // Dynamically resolve MemPalace path based on OS 
+    const mempalaceCmd = process.platform === "win32" 
+      ? path.join(cwd, ".venv", "Scripts", "mempalace.exe")
+      : path.join(cwd, ".venv", "bin", "mempalace");
     
     console.log(`[MEMPALACE] Searching for: "${sanitizedQuery}"`);
     const { stdout, stderr } = await execAsync(`${mempalaceCmd} search "${sanitizedQuery}"`, {

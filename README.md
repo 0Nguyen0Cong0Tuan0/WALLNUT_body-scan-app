@@ -1,75 +1,100 @@
 # WALLNUT Body Scan Platform
 
-**WALLNUT** (<ins>W</ins>iFi-enabled <ins>A</ins>daptive <ins>LL</ins>-body <ins>N</ins>ode <ins>U</ins>nified <ins>T</ins>elemetry) is a dual-pipeline, privacy-first body composition and vitals screening platform built on **Next.js 16** with **TypeScript** and **TailwindCSS**. 
+**WALLNUT** (<ins>W</ins>iFi-enabled <ins>A</ins>daptive <ins>LL</ins>-body <ins>N</ins>ode <ins>U</ins>nified <ins>T</ins>elemetry) is a dual-pipeline, privacy-first body composition and vitals screening platform built on **Next.js 15** with **TypeScript** and **TailwindCSS**. 
 
-It is capable of extracting precise biometric structures through two sophisticated mechanisms:
-1. **At-Rest WiFi CSI Sensing**: Decodes Orthogonal Frequency Division Multiplexing (OFDM) Channel State Information (CSI) from 5GHz ESP32-S3 IoT sensors to deduce mechanical respiration rates, cardiac pulse (ballistocardiography), subcarrier energy region mapping (SMPL pose fitting), and Ramanujan anthropometric constraints.
-2. **Vision-Language Artificial Intelligence**: Evaluates user-submitted 2D silhouettes using the **Qwen-VL-Max** multimodal network alongside body height/weight to synthesize body fat composition matrices (with Deurenberg BMI algorithmic fallbacks).
+It extracts precise biometric structures through sophisticated mechanisms and anchors all medical guidance to locally-hosted, verified clinical literature using an integrated AI researcher.
 
-## Dual-Pipeline Core Architecture
+## Core Features & Architecture
 
 ### 1. RF Multipath Pipeline (CSI)
-- **Input Methods**: Passive hardware continuous UDP streams (802.11ac packets), simulated offline proof-bundles, or recorded `.jsonl` trace buffers.
-- **Biometric Digital Signal Processing (DSP)**: Mean-centered subcarriers routed into 2nd-Order **IIR Butterworth Bandpass Filters**—extracting human breathing rates (0.1–0.5 Hz) and ballistic cardiac mechanical perturbations (0.8–2.0 Hz) using zero-crossing calculations. 
-- **Time/Frequency Kinematics**: Sliding-window Discrete Fourier Transform (DFT) calculates phase stability and signal confidence margins.
-- **Ramanujan Body Modeling**: Generates 8 anatomical circumferences by estimating cross-sections of the torso, limbs, and trunk from dense keypoints mapped mathematically onto an SMPL reference topology.
+Decodes Orthogonal Frequency Division Multiplexing (OFDM) Channel State Information (CSI) from 5GHz ESP32-S3 IoT sensors:
+- **Biometric DSP**: IIR Butterworth Bandpass Filters extract human breathing rates (0.1–0.5 Hz) and ballistic cardiac perturbations (0.8–2.0 Hz).
+- **Ramanujan Body Modeling**: Generates 8 anatomical circumferences by mapping physical WiFi signal blockages onto an SMPL reference topology.
 
-### 2. Vision-Language Multimodal Pipeline (Image AI)
-- **Input Methods**: Client-side drag-and-drop ingestion of Standard 2D Image files (`.jpeg`, `.png`, `.webp`) plus Height and Weight properties mapped onto multipart boundary streams.
-- **AI Body Composition Estimation**: Visual matrices coupled directly to the `Qwen-VL-Max` DashScope inference endpoint. Uses generative vision to calculate fat distribution arrays visually mapped along human contours.
-- **Deurenberg Fallback Mechanism**: If the DashScope API rate limits are exceeded, inference seamlessly resorts to deterministic univariate approximations utilizing BMI scalar rules extrapolated using non-gender deterministic modifiers.
+### 2. Multimodal AI Pipeline (Qwen-VL-Max)
+Evaluates client-side 2D silhouettes coupled with RF Data to determine specific body fat compositions, falling back gracefully to univariate Deurenberg algorithmic calculations when AI inference is limited.
+
+### 3. Medical RAG System (MemPalace)
+The integrated Chatbot does not hallucinate medical facts. All questions concerning health, baselines, and safety ranges are grounded against a strictly maintained local vector database powered by **MemPalace**.
+- **Vector Embeddings Localized**: Source content lives verbatim inside a Python-based physical database located at `knowledge_base/`.
+- **RAG Interception**: The Next.js API intercepts Qwen context requests and bridges dynamically into the MemPalace subsystem via child processes.
+
+### 4. Autonomous PubMed Research Agent
+If a user queries for biometric relationships that *do not* exist in the MemPalace database, the system will **safely refuse** to answer and intelligently trigger a background AI Agent.
+- **NCBI E-Utilities**: Programmatically hits PubMed to locate the latest peer-reviewed (*Clinical Trials, Meta-Analyses*) literature.
+- **LLM Medical Gate**: Sifts out irrelevant data, synthesizes correct constraints, writes `.md` files to your disk, and completely re-indexes your dataset on the fly. 
 
 ## Technology Stack
-
-- **Framework**: [Next.js](https://nextjs.org/) 16 with App Router and Turbopack.
-- **Models**: [Qwen Multimodal](https://dashscope.aliyun.com/) APIs (`qwen-vl-max`, `qwen-plus`).
-- **3D Engine**: WebGL with [Three.js](https://threejs.org/) + React Three Fiber (`@react-three/fiber`) used to visualize the real-time SMPL spatial topologies.
-- **Compute Storage**: Stateless design. Client-local state caches are persisted internally via browser `localStorage`. 
+- **Framework**: Next.js 15 App Router | Node.js (v20+)
+- **LLM Models**: DashScope Qwen (`qwen-vl-max`, `qwen-plus`)
+- **Agents/Vector DB**: Python 3.9+, MemPalace local embeddings natively bridging to TypeScript
+- **Graphics**: WebGL / Three.js / React Three Fiber
 
 ---
 
 ## Running the Application 🚀
 
-### 1. System Requirements
-- Node.js `^v20`
-- Python `>3.9` (Only required if you are generating synthetic CSI mock files using the `test_data` module). **No `pip` dependencies are required; it uses strict standard libraries.**
+### 1. System Pre-Requisites (Local Development)
+- **Node.js**: `v20+`
+- **Python**: `3.9+` (Crucial for MemPalace functionality)
 
-### 2. Environment Configuration
-Create a `.env.local` file in the root context containing your API telemetry keys:
+### 2. Initial Setup
+Clone the repository and inject your API configurations:
 ```bash
-# Model Inference key for AI clinical narration and Vision tracking
-DASHSCOPE_API_KEY="your-qwen-api-key-here"
+# Create environment configurations
+cp .env.example .env.local
 
-# (Optional) Developer routing configurations
-LIVE_CSI_UDP_PORT="8080"
+# Add your Alibaba Cloud DashScope Key inside .env.local:
+QWEN_API_KEY="your-qwen-api-key-here"
 ```
 
-### 3. Build & Run Node Service
-Start the project locally utilizing NPM configurations.
+### 3. Initialize The AI Agent & Python Backend 
+The application relies on Python for the `mempalace` agent and mock offline data traces.
 ```bash
 npm install
+
+# Initialize Python Virtual Environment
+python -m venv .venv
+
+# Activate Virtual Environment (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
+# Activate Virtual Environment (Mac/Linux)
+source .venv/bin/activate
+
+# Install the Database backend
+pip install mempalace
+
+# "Mine" your starting medical domain knowledge explicitly
+mempalace mine .\knowledge_base
+```
+
+### 4. Start the Application
+Run the Next.js edge-compilation development server. Exactly 10 seconds post-boot, the system triggers the native Autonomous Cron job to verify your agent works safely.
+```bash
 npm run dev
 ```
-Navigate to `http://localhost:3000` to begin interacting. 
+Navigate to `http://localhost:3000`.
 
 ---
 
-## Mock Signal Generation (Testing without Physical Hardware)
+## Production Deployment (Docker)
 
-If you lack live ESP32-S3 IoT transceivers to stream physical WiFi OFDM responses, you can rapidly test the logic gates via the included deterministic signal simulator script:
+To deploy directly to the cloud without dealing with Python OS idiosyncrasies, use our built-in `Dockerfile` which perfectly configures a unified `node:22-slim` container carrying both Python 3 embedded capabilities and your Next.js standalone build.
 
+```bash
+docker build -t body-scan-app .
+docker run -p 3000:3000 --env-file .env.local body-scan-app
+```
+
+## Mock Signal Generation
+
+Lack live ESP32-S3 IoT transceivers? Generate synthetic CSI blockages natively:
 ```bash
 # Execute local test generator
 python test_data/signal/generate_signals.py
-
-# Optional: Generate a massive 30-minute block for long-range tests
-python test_data/signal/generate_signals.py --duration 1800
 ```
-This utility mathematically replicates the physics of human cardiopulmonary modulation to generate dense `profile_balanced_baseline.csi.jsonl` traces, allowing seamless debugging inside the application's "File Upload" view.
+Upload the generated `.jsonl` inside the application to spoof a live WiFi capture.
 
 ---
 
-## Clinical Safety & Academic Lineage 
-WALLNUT acts strictly as a **non-ionizing wellness analytics proxy**. WiFi router signals naturally operate roughly ~50,000x beneath standard ICNIRP threshold emissions for environmental safety. 
-
-Because estimations hinge on the mathematical physics of `Ramanujan cross-sectional volume estimates` and derived `Deurenberg` logic, findings do *not* legally constitute medical diagnostic truth boundaries. The methodologies within this application trace foundational lineage to CMU robotics institute's *DensePose From WiFi (arXiv:2301.00250)* logic structures.
+> **Disclaimer**: This analysis tool functions as a non-ionizing wellness proxy, not a certified clinical diagnostic. Findings trace foundational lineage to CMU's *DensePose From WiFi (arXiv:2301.00250).*
