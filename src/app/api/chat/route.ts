@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
+import { searchMempalace } from "@/lib/mempalace";
+import { runResearchTask } from "@/features/agent/researchAgent";
 
 interface ChatRequest {
   question: string;
@@ -254,8 +256,29 @@ Provide 3-4 specific, actionable recommendations based on the data:
 
 Provide the complete structured clinical assessment above.`;
     } else {
-      // Regular chat response
-      prompt = `You are a helpful health and wellness assistant analyzing WiFi CSI (Channel State Information) body scan results.
+      console.log("[CHAT API] Querying MemPalace vector database for RAG context...");
+      const ragContext = await searchMempalace(question);
+      console.log(`[CHAT API] Retrieved context length: ${ragContext.length} chars`);
+
+      const hasContext = ragContext && ragContext.length > 50;
+
+      if (!hasContext) {
+        // RAG MISS: Safe Refusal + Background Auto-Queue
+        prompt = `The user asked: "${question}".
+        
+You do NOT have verified clinical guidelines in your database about this specific topic. 
+You MUST refuse to answer the medical question to prevent hallucination.
+Respond EXACTLY like this (or a close variation): "I currently do not have verified clinical guidelines in my database about this topic. However, I have just dispatched my medical agent to research this on PubMed. Please check back shortly."
+Do NOT attempt to answer the medical question using your internal weights.`;
+
+        // Fire off background task without blocking the response
+        console.log("[CHAT API] RAG Miss detected. Dispatching PubMed Research Agent in background...");
+        runResearchTask(question).catch(e => console.error("Background research task failed:", e));
+      } else {
+        // Regular chat response
+        prompt = `You are a helpful health and wellness assistant analyzing WiFi CSI (Channel State Information) body scan results.
+
+=== CLINICAL GUIDELINES / DOMAIN KNOWLEDGE ===\n${ragContext}\n===============================================\nUse the above established guidelines to inform your answers ensuring medical accuracy.
 
 Current scan metrics:
 • Heart Rate: ${scanMetrics.heartRateBpm.toFixed(0)} bpm
@@ -271,6 +294,7 @@ ${scanMetrics.clinicalSummary ? `PREVIOUS CLINICAL SUMMARY: ${scanMetrics.clinic
 User question: ${question}
 
 Provide a helpful, educational response about their scan results. Keep responses concise but informative (3-6 sentences). If they ask about health risks, include a disclaimer that this is educational info, not medical advice. Use markdown formatting (**bold** for emphasis, • for bullet points if listing items).`;
+      }
     }
 
     console.log("[CHAT API] Sending request to DashScope...");

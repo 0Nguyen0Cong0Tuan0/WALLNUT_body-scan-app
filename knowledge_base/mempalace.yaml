@@ -1,0 +1,5 @@
+wing: knowledge_base
+rooms:
+- name: general
+  description: All project files
+  keywords: []
